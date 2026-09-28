@@ -1,0 +1,442 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family:
+    "Segoe UI",
+    -apple-system,
+    BlinkMacSystemFont,
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  /* A subtle brand-tinted glow behind the flat dark background gives the
+     whole app a bit more depth/warmth without being distracting or adding
+     any external image/font requests. */
+  background-color: #0b0f14;
+  background-image:
+    radial-gradient(circle at 12% -10%, rgba(47, 131, 224, 0.16), transparent 45%),
+    radial-gradient(circle at 100% 0%, rgba(78, 147, 229, 0.08), transparent 40%);
+  background-attachment: fixed;
+  color: #e6e9ee;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background-color: rgba(47, 131, 224, 0.35);
+}
+
+button,
+a,
+[role="button"] {
+  transition:
+    transform 120ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    opacity 150ms ease;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #2a323d;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #3a4552;
+}
+
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+@keyframes genie-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.genie-fade-in {
+  animation: genie-fade-in 260ms ease both;
+}
+
+@keyframes genie-sparkle-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.75;
+    transform: scale(1.12);
+  }
+}
+
+.genie-sparkle {
+  display: inline-block;
+  animation: genie-sparkle-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes genie-live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(63, 166, 106, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(63, 166, 106, 0);
+  }
+}
+
+.genie-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #3fa66a;
+  animation: genie-live-pulse 1.6s ease-in-out infinite;
+}
+
+/* "Genie is working with your agents..." waiting banner (AgentActivityAnimation) -
+   a typing-indicator-style trio of bouncing dots plus a faint animated
+   brand-tinted background so the whole card visibly feels "alive" while an
+   agent step is still in flight. */
+@keyframes genie-bounce-dot {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  40% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+.genie-bounce-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.genie-bounce-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #6ba3ea;
+  animation: genie-bounce-dot 1.1s ease-in-out infinite;
+}
+
+.genie-bounce-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.genie-bounce-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes genie-agent-activity-glow {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.genie-agent-activity {
+  background-image: linear-gradient(
+    120deg,
+    rgba(47, 131, 224, 0.14) 0%,
+    rgba(138, 99, 210, 0.1) 50%,
+    rgba(47, 131, 224, 0.14) 100%
+  );
+  background-size: 200% 200%;
+  animation: genie-agent-activity-glow 3.2s ease-in-out infinite;
+}
+
+@keyframes genie-indeterminate-rail {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+.genie-indeterminate-rail {
+  height: 4px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(47, 131, 224, 0.18);
+}
+
+.genie-indeterminate-rail::after {
+  content: "";
+  display: block;
+  width: 30%;
+  height: 100%;
+  border-radius: inherit;
+  background: #6ba3ea;
+  box-shadow: 0 0 10px rgba(107, 163, 234, 0.8);
+  animation: genie-indeterminate-rail 1.3s ease-in-out infinite;
+}
+
+/* Mission flow sidebar - a "skill tree" style vertical pipeline, not a
+   standard nav menu: glowing status nodes, an energy line that visibly
+   flows toward whichever stage is currently active, and a subtle hover
+   lift on reachable rows. */
+@keyframes genie-node-pulse-active {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(217, 154, 43, 0.5),
+      0 0 14px 2px rgba(217, 154, 43, 0.45);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      0 0 0 8px rgba(217, 154, 43, 0),
+      0 0 22px 6px rgba(217, 154, 43, 0.65);
+    transform: scale(1.06);
+  }
+}
+
+.genie-stage-node-active {
+  animation: genie-node-pulse-active 1.8s ease-in-out infinite;
+}
+
+.genie-stage-node-complete {
+  box-shadow: 0 0 12px 2px rgba(63, 166, 106, 0.45);
+}
+
+.genie-stage-node-locked {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
+@keyframes genie-flow-travel {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 -32px;
+  }
+}
+
+.genie-stage-line-active {
+  background-image: repeating-linear-gradient(to bottom, #d99a2b 0, #d99a2b 8px, transparent 8px, transparent 16px);
+  background-size: 100% 32px;
+  animation: genie-flow-travel 900ms linear infinite;
+}
+
+.genie-stage-row {
+  border-radius: 10px;
+  transition:
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.genie-stage-row.genie-stage-clickable:hover {
+  background-color: rgba(47, 131, 224, 0.08);
+  transform: translateX(3px);
+}
+
+.genie-stage-eyebrow {
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.genie-xp-bar {
+  transition: width 400ms ease;
+}
+
+.genie-req-item {
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.genie-req-item:hover {
+  transform: translateX(3px);
+  border-color: #2f83e0;
+  background-color: #1a2230;
+}
+
+/* Interactive flow diagrams (Architecture Studio: UI <-> Agentic Workflow,
+   Orchestrator <-> individual agents) - a calm, static "connected" line
+   plus a single gentle traveling particle sweep on entrance (not a
+   perpetual strobe - repeated bright motion forever is fatiguing to look
+   at on a page meant to be read, not just glanced at) so the diagram
+   still feels alive without being distracting. */
+.genie-flow-connector {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 100%;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 2px;
+  background-color: rgba(47, 131, 224, 0.32);
+  transition: opacity 200ms ease, background-color 200ms ease;
+}
+
+.genie-flow-connector-active {
+  background-color: rgba(47, 131, 224, 0.5);
+}
+
+@keyframes genie-flow-particle {
+  0% {
+    left: -2%;
+    opacity: 0;
+    transform: translateY(-50%) scale(0.6);
+  }
+  20% {
+    opacity: 0.9;
+    transform: translateY(-50%) scale(1);
+  }
+  80% {
+    opacity: 0.9;
+    transform: translateY(-50%) scale(1);
+  }
+  100% {
+    left: 102%;
+    opacity: 0;
+    transform: translateY(-50%) scale(0.6);
+  }
+}
+
+.genie-flow-particle {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6ab2ff;
+  box-shadow: 0 0 6px 1px rgba(106, 178, 255, 0.5);
+  animation: genie-flow-particle 1.6s ease-in-out 1;
+  animation-fill-mode: forwards;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .genie-flow-particle {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+.genie-flow-node {
+  position: relative;
+  cursor: pointer;
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease,
+    border-color 200ms ease,
+    background-color 200ms ease;
+}
+
+.genie-flow-node:hover,
+.genie-flow-node:focus-visible,
+.genie-flow-node.genie-flow-node-active {
+  transform: translateY(-5px) scale(1.04);
+  border-color: #2f83e0 !important;
+  box-shadow:
+    0 10px 26px rgba(47, 131, 224, 0.32),
+    0 0 0 1px rgba(47, 131, 224, 0.45);
+  background-color: #182534 !important;
+}
+
+/* Architecture Studio's requirement-derived "UI Design" / "Multi-Agent
+   Workflow" sections - the two most important, mission-specific outputs
+   on that page - get a slow, subtle glow border so they visually stand
+   out from every other static card without being distracting to read
+   next to (single hue, low blur/opacity, ~8s breathing cycle rather than
+   a fast, high-contrast pulse). */
+@keyframes genie-section-highlight-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(47, 131, 224, 0.28),
+      0 0 10px 0 rgba(47, 131, 224, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(47, 131, 224, 0.4),
+      0 0 14px 1px rgba(47, 131, 224, 0.14);
+  }
+}
+
+.genie-section-card-highlight {
+  animation: genie-section-highlight-glow 8s ease-in-out infinite;
+  background-image: linear-gradient(160deg, rgba(47, 131, 224, 0.04), transparent 60%);
+}
+
+.genie-section-card-highlight:hover {
+  animation-play-state: paused;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(47, 131, 224, 0.45) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .genie-section-card-highlight {
+    animation: none;
+    box-shadow: 0 0 0 1px rgba(47, 131, 224, 0.3);
+  }
+}
+
+/* Staggered entrance for each item inside an animated architecture
+   diagram (see ArchitectureComponentDiagram's `animated` prop) - each
+   node/connector fades/slides in slightly after the previous one instead
+   of all popping in at once. */
+.genie-stagger-in {
+  animation: genie-fade-in 420ms ease both;
+}
+
+/* Architecture Studio's "UI Design" screen gallery (UiScreenShowcase) -
+   each screen mockup card lifts slightly on hover/focus so the journey
+   reads as a set of distinct, tappable screens rather than flat, static
+   boxes. */
+.genie-ui-screen-card {
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+}
+
+.genie-ui-screen-card:hover,
+.genie-ui-screen-card:focus-visible {
+  transform: translateY(-4px);
+  border-color: rgba(47, 131, 224, 0.5) !important;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
+}
+

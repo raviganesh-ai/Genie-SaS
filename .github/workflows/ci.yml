@@ -1,0 +1,262 @@
+name: CI
+
+# The repo's actual default branch is "master" (verify with `git branch -a`
+# before ever changing this back to "main" - CI silently never ran on any
+# push/PR until this was fixed, since the previous trigger watched a branch
+# that doesn't exist in this repo).
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  backend:
+    name: Backend (pytest + ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: python -m ruff check app tests
+
+      - name: Test (pytest)
+        run: python -m pytest -v
+
+  frontend:
+    name: Frontend (typecheck + lint + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+  # Deploy jobs only run on a real push to master (never on a PR from a
+  # fork, and never unless both CI jobs above already passed) - see
+  # "Continuous deployment" in README.md for the one-time Azure setup
+  # (federated OIDC credential + RBAC) required before these can succeed.
+  prepare-gateway:
+    name: Prepare platform gateway (API Management)
+    needs: [backend, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      gateway-url: ${{ steps.prepare.outputs.gateway-url }}
+    timeout-minutes: 75
+    concurrency:
+      group: prepare-platform-gateway
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required secrets
+        run: |
+          missing=()
+          [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] && missing+=("AZURE_CLIENT_ID")
+          [ -z "${{ secrets.AZURE_TENANT_ID }}" ] && missing+=("AZURE_TENANT_ID")
+          [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ] && missing+=("AZURE_SUBSCRIPTION_ID")
+          [ -z "${{ vars.AZURE_CONTAINER_APP_NAME }}" ] && missing+=("AZURE_CONTAINER_APP_NAME")
+          [ -z "${{ vars.AZURE_RESOURCE_GROUP }}" ] && missing+=("AZURE_RESOURCE_GROUP")
+          [ -z "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" ] && missing+=("GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL")
+          [ -z "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}" ] && missing+=("GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME")
+          [ -z "${{ vars.GENIE_GATEWAY_ALLOWED_ORIGIN }}" ] && missing+=("GENIE_GATEWAY_ALLOWED_ORIGIN")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required settings for prepare-gateway: ${missing[*]}. See README.md 'Continuous deployment' section."
+            exit 1
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision and verify public API Management edge
+        id: prepare
+        shell: pwsh
+        run: |
+          $result = ./scripts/deploy_platform_gateway.ps1 `
+            -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+            -ResourceGroup "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            -ContainerAppName "${{ vars.AZURE_CONTAINER_APP_NAME }}" `
+            -AllowedOrigin "${{ vars.GENIE_GATEWAY_ALLOWED_ORIGIN }}" `
+            -PublisherEmail "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" `
+            -PublisherName "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}" `
+            -PrepareOnly |
+              ConvertFrom-Json
+          "gateway-url=$($result.gatewayUrl)" | Out-File `
+            -FilePath $env:GITHUB_OUTPUT `
+            -Encoding utf8 `
+            -Append
+
+  deploy-backend:
+    name: Deploy backend (private Container Apps)
+    needs: [backend, frontend, prepare-gateway, deploy-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: production
+    # Safety net: if a step ever hangs (e.g. a CLI retrying on missing/
+    # invalid credentials) this bounds the wasted runner minutes instead of
+    # running until the default 6h job timeout.
+    timeout-minutes: 75
+    concurrency:
+      group: deploy-backend
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail fast with a clear message when the required Azure OIDC secrets
+      # have not been configured yet, instead of letting azure/login@v2 (or
+      # a later az CLI call) fail/hang with a confusing error.
+      - name: Check required secrets
+        run: |
+          missing=()
+          [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] && missing+=("AZURE_CLIENT_ID")
+          [ -z "${{ secrets.AZURE_TENANT_ID }}" ] && missing+=("AZURE_TENANT_ID")
+          [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ] && missing+=("AZURE_SUBSCRIPTION_ID")
+          [ -z "${{ vars.AZURE_ACR_NAME }}" ] && missing+=("AZURE_ACR_NAME")
+          [ -z "${{ vars.AZURE_CONTAINER_APP_NAME }}" ] && missing+=("AZURE_CONTAINER_APP_NAME")
+          [ -z "${{ vars.AZURE_RESOURCE_GROUP }}" ] && missing+=("AZURE_RESOURCE_GROUP")
+          [ -z "${{ vars.GENIE_MEMORY_STORE_ENDPOINT }}" ] && missing+=("GENIE_MEMORY_STORE_ENDPOINT")
+          [ -z "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" ] && missing+=("GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL")
+          [ -z "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}" ] && missing+=("GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME")
+          [ -z "${{ vars.GENIE_PROTOTYPE_MAX_ACTIVE_PER_OWNER }}" ] && missing+=("GENIE_PROTOTYPE_MAX_ACTIVE_PER_OWNER")
+          [ -z "${{ vars.GENIE_GATEWAY_ALLOWED_ORIGIN }}" ] && missing+=("GENIE_GATEWAY_ALLOWED_ORIGIN")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets for deploy-backend: ${missing[*]}. See README.md 'Continuous deployment' section for one-time Azure OIDC setup."
+            exit 1
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push backend image (ACR)
+        run: |
+          az acr build \
+            --registry "${{ vars.AZURE_ACR_NAME }}" \
+            --image "genie-backend:${{ github.sha }}" \
+            --file backend/Dockerfile \
+            .
+
+      - name: Finalize and verify private platform gateway
+        shell: pwsh
+        run: |
+          ./scripts/deploy_platform_gateway.ps1 `
+            -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+            -ResourceGroup "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            -ContainerAppName "${{ vars.AZURE_CONTAINER_APP_NAME }}" `
+            -AllowedOrigin "${{ vars.GENIE_GATEWAY_ALLOWED_ORIGIN }}" `
+            -PublisherEmail "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" `
+            -PublisherName "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}"
+
+      # The immutable image, retired-sidecar removal, CORS setting, probes,
+      # and ingress port 8000 are applied in one ARM patch, then verified
+      # through APIM because direct backend ingress is private.
+      - name: Roll out anonymous backend revision
+        shell: pwsh
+        run: |
+          ./scripts/deploy_backend.ps1 `
+            -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+            -ResourceGroup "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            -ContainerAppName "${{ vars.AZURE_CONTAINER_APP_NAME }}" `
+            -BackendImage "${{ vars.AZURE_ACR_NAME }}.azurecr.io/genie-backend:${{ github.sha }}" `
+            -AllowedOrigin "${{ vars.GENIE_GATEWAY_ALLOWED_ORIGIN }}" `
+            -GatewayUrl "${{ needs.prepare-gateway.outputs.gateway-url }}" `
+            -MemoryStoreEndpoint "${{ vars.GENIE_MEMORY_STORE_ENDPOINT }}" `
+            -PrototypeApiGatewayPublisherEmail "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" `
+            -PrototypeApiGatewayPublisherName "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}" `
+            -PrototypeMaxActivePerOwner ${{ vars.GENIE_PROTOTYPE_MAX_ACTIVE_PER_OWNER }} `
+            -RevisionSuffix "gh${{ github.run_number }}"
+
+  deploy-frontend:
+    name: Deploy frontend (Static Web Apps)
+    needs: [prepare-gateway]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: production
+    # Safety net: the swa CLI has been observed to hang (rather than fail
+    # fast) when given an empty/invalid deployment token, so bound the
+    # wasted runner minutes instead of running until the default 6h limit.
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-frontend
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail fast with a clear message when the deployment token has not
+      # been configured yet, instead of letting the swa CLI hang on an
+      # empty token (observed to not fail fast in practice).
+      - name: Check required secrets
+        run: |
+          if [ -z "${{ secrets.SWA_DEPLOYMENT_TOKEN }}" ] || \
+             [ -z "${{ needs.prepare-gateway.outputs.gateway-url }}" ]; then
+            echo "::error::Missing SWA_DEPLOYMENT_TOKEN or the verified platform gateway URL. See README.md 'Continuous deployment' section."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_GENIE_API_BASE_URL: ${{ needs.prepare-gateway.outputs.gateway-url }}
+
+      - name: Deploy to Azure Static Web Apps
+        timeout-minutes: 5
+        run: npx --yes @azure/static-web-apps-cli@latest deploy ./dist --deployment-token "${{ secrets.SWA_DEPLOYMENT_TOKEN }}" --env production
+

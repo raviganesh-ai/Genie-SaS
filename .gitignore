@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# .NET
+**/bin/
+**/obj/
+
+# Environment files (never commit secrets)
+.env
+*.env.local
+.env.*
+
+# Generated deployment artifacts (contain subscription-specific values)
+infra/roles/*.generated.json
+infra/.build/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Local scratch / sample content (never tracked)
+/sample/
+
+# Ad hoc debug/output transcripts dropped at the repo root during dev
+# sessions (test/lint run captures, one-off demo output) - never source.
+/pytest_out*.txt
+/demo_output*.txt
+/be_*_cleanup.txt
+/fe_*_cleanup.txt
+/debug_agent.txt
+/dryrun_output.txt
+/fix_models.txt
+scripts/.generated_prototype.html
+
+_build_staging/

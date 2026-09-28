@@ -1,0 +1,337 @@
+<#
+.SYNOPSIS
+    Publishes Genie through API Management and makes its Container Apps
+    environment private.
+
+.DESCRIPTION
+    Provisions the public Standard v2 API Management edge with outbound VNet
+    integration, verifies it against the current backend, prepares private DNS,
+    disables environment public access, creates the Container Apps private
+    endpoint, and then verifies both the private gateway route and direct-route
+    denial. Use PrepareOnly to stop after APIM verification so the frontend can
+    be switched to the gateway before the private-backend cutover.
+#>
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$SubscriptionId,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ResourceGroup,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ContainerAppName,
+
+    [Parameter(Mandatory = $true)]
+    [string]$AllowedOrigin,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PublisherEmail,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PublisherName,
+
+    [switch]$PrepareOnly,
+
+    [int]$WaitTimeoutSeconds = 1800
+)
+
+$ErrorActionPreference = "Stop"
+
+function Invoke-AzJson {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+
+    $output = & az @Arguments --only-show-errors -o json
+    if ($LASTEXITCODE -ne 0) {
+        throw "Azure CLI command failed: az $($Arguments -join ' ')"
+    }
+    return $output | ConvertFrom-Json -Depth 100
+}
+
+function Wait-ForGatewayReadiness {
+    param(
+        [Parameter(Mandatory = $true)][string]$GatewayUrl,
+        [Parameter(Mandatory = $true)][datetime]$Deadline
+    )
+
+    do {
+        try {
+            $health = Invoke-RestMethod `
+                -Method Get `
+                -Uri "$GatewayUrl/health/ready" `
+                -TimeoutSec 30
+            if ($health.status -eq "ready") {
+                return
+            }
+        }
+        catch {
+            Write-Host "Gateway route is not ready yet: $($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds 15
+    } while ((Get-Date) -lt $Deadline)
+
+    throw "API Management did not reach the Genie readiness endpoint within $WaitTimeoutSeconds seconds."
+}
+
+function Invoke-PrivateEndpointDeployment {
+    param(
+        [Parameter(Mandatory = $true)][string]$SubscriptionId,
+        [Parameter(Mandatory = $true)][string]$ResourceGroup,
+        [Parameter(Mandatory = $true)][string]$DeploymentName,
+        [Parameter(Mandatory = $true)][string]$TemplateFile,
+        [Parameter(Mandatory = $true)][string[]]$CommonParameters,
+        [Parameter(Mandatory = $true)][string]$PrivateEndpointName,
+        [Parameter(Mandatory = $true)][datetime]$Deadline
+    )
+
+    $existingEndpointOutput = & az network private-endpoint show `
+        --subscription $SubscriptionId `
+        --resource-group $ResourceGroup `
+        --name $PrivateEndpointName `
+        --only-show-errors `
+        -o json 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $existingEndpoint = $existingEndpointOutput | ConvertFrom-Json -Depth 100
+        if ($existingEndpoint.provisioningState -eq "Succeeded") {
+            Write-Host "Private endpoint already exists; preserving its connection state."
+            return
+        }
+    }
+
+    do {
+        $deploymentOutput = & az deployment group create `
+            --subscription $SubscriptionId `
+            --resource-group $ResourceGroup `
+            --name $DeploymentName `
+            --template-file $TemplateFile `
+            --parameters @CommonParameters enablePrivateDns=true enablePrivateEndpoint=true `
+            --only-show-errors `
+            -o none 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+
+        $deploymentError = $deploymentOutput -join [Environment]::NewLine
+        if ($deploymentError -notmatch "ManagedEnvironmentNotHealthy") {
+            throw "Container Apps private endpoint deployment failed: $deploymentError"
+        }
+        Write-Host "Container Apps environment is still settling; retrying private endpoint deployment..."
+        Start-Sleep -Seconds 30
+    } while ((Get-Date) -lt $Deadline)
+
+    throw "Container Apps private endpoint deployment did not succeed before the cutover deadline."
+}
+
+function Wait-ForPrivateEndpointApproval {
+    param(
+        [Parameter(Mandatory = $true)][string]$SubscriptionId,
+        [Parameter(Mandatory = $true)][string]$ResourceGroup,
+        [Parameter(Mandatory = $true)][string]$PrivateEndpointName,
+        [Parameter(Mandatory = $true)][datetime]$Deadline
+    )
+
+    do {
+        $privateEndpoint = Invoke-AzJson network private-endpoint show `
+            --subscription $SubscriptionId `
+            --resource-group $ResourceGroup `
+            --name $PrivateEndpointName
+        $connectionStatuses = @(
+            $privateEndpoint.privateLinkServiceConnections |
+                ForEach-Object { $_.privateLinkServiceConnectionState.status }
+        )
+        if ($connectionStatuses.Count -gt 0 -and @($connectionStatuses | Where-Object { $_ -ne "Approved" }).Count -eq 0) {
+            return $privateEndpoint
+        }
+        if (@($connectionStatuses | Where-Object { $_ -in @("Rejected", "Disconnected") }).Count -gt 0) {
+            throw "The Container Apps private endpoint connection was rejected or disconnected."
+        }
+        Write-Host "Waiting for Container Apps private endpoint approval..."
+        Start-Sleep -Seconds 15
+    } while ((Get-Date) -lt $Deadline)
+
+    throw "The Container Apps private endpoint connection was not approved before the cutover deadline."
+}
+
+foreach ($requiredValue in @{
+    SubscriptionId = $SubscriptionId
+    ResourceGroup = $ResourceGroup
+    ContainerAppName = $ContainerAppName
+    AllowedOrigin = $AllowedOrigin
+    PublisherEmail = $PublisherEmail
+    PublisherName = $PublisherName
+}.GetEnumerator()) {
+    if ([string]::IsNullOrWhiteSpace($requiredValue.Value)) {
+        throw "$($requiredValue.Key) cannot be blank."
+    }
+}
+if (-not $AllowedOrigin.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "AllowedOrigin must use HTTPS."
+}
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$templateFile = Join-Path $repoRoot "infra/platform-private-gateway.bicep"
+$app = Invoke-AzJson containerapp show `
+    --subscription $SubscriptionId `
+    --resource-group $ResourceGroup `
+    --name $ContainerAppName
+$environment = Invoke-AzJson containerapp env show `
+    --subscription $SubscriptionId `
+    --ids $app.properties.environmentId
+$infrastructureSubnetId = $environment.properties.vnetConfiguration.infrastructureSubnetId
+if ([string]::IsNullOrWhiteSpace($infrastructureSubnetId)) {
+    throw "The Container Apps environment is not VNet integrated."
+}
+$subnetParts = $infrastructureSubnetId -split "/"
+$virtualNetworksIndex = [array]::IndexOf($subnetParts, "virtualNetworks")
+if ($virtualNetworksIndex -lt 0 -or $virtualNetworksIndex + 1 -ge $subnetParts.Count) {
+    throw "Could not determine the virtual network from '$infrastructureSubnetId'."
+}
+$virtualNetworkName = $subnetParts[$virtualNetworksIndex + 1]
+$deploymentName = "genie-platform-private-gateway"
+$commonParameters = @(
+    "containerAppName=$ContainerAppName",
+    "containerAppsEnvironmentName=$($environment.name)",
+    "virtualNetworkName=$virtualNetworkName",
+    "publisherEmail=$PublisherEmail",
+    "publisherName=$PublisherName",
+    "allowedOrigin=$($AllowedOrigin.TrimEnd('/'))"
+)
+
+Write-Host "Provisioning the public API Management edge..." -ForegroundColor Cyan
+& az deployment group create `
+    --subscription $SubscriptionId `
+    --resource-group $ResourceGroup `
+    --name $deploymentName `
+    --template-file $templateFile `
+    --parameters @commonParameters enablePrivateDns=false enablePrivateEndpoint=false `
+    --only-show-errors `
+    -o none
+if ($LASTEXITCODE -ne 0) {
+    throw "API Management edge deployment failed."
+}
+$deployment = Invoke-AzJson deployment group show `
+    --subscription $SubscriptionId `
+    --resource-group $ResourceGroup `
+    --name $deploymentName
+$gatewayUrl = $deployment.properties.outputs.gatewayUrl.value.TrimEnd("/")
+$privateEndpointName = "$($environment.name)-private-endpoint"
+$deadline = (Get-Date).AddSeconds($WaitTimeoutSeconds)
+
+if ($environment.properties.publicNetworkAccess -eq "Disabled") {
+    Write-Host "Resuming the fail-closed private endpoint cutover..." -ForegroundColor Cyan
+    Invoke-PrivateEndpointDeployment `
+        -SubscriptionId $SubscriptionId `
+        -ResourceGroup $ResourceGroup `
+        -DeploymentName $deploymentName `
+        -TemplateFile $templateFile `
+        -CommonParameters $commonParameters `
+        -PrivateEndpointName $privateEndpointName `
+        -Deadline $deadline
+}
+Wait-ForGatewayReadiness -GatewayUrl $gatewayUrl -Deadline $deadline
+
+if ($PrepareOnly) {
+    [pscustomobject]@{
+        apiManagement = $deployment.properties.outputs.apiManagementName.value
+        gatewayUrl = $gatewayUrl
+        containerAppsEnvironment = $environment.name
+        publicNetworkAccess = $environment.properties.publicNetworkAccess
+        gatewayRoute = "verified"
+        cutover = "pending"
+    } | ConvertTo-Json -Depth 10 -Compress
+    return
+}
+
+Write-Host "Preparing private DNS for the Container Apps environment..." -ForegroundColor Cyan
+& az deployment group create `
+    --subscription $SubscriptionId `
+    --resource-group $ResourceGroup `
+    --name $deploymentName `
+    --template-file $templateFile `
+    --parameters @commonParameters enablePrivateDns=true enablePrivateEndpoint=false `
+    --only-show-errors `
+    -o none
+if ($LASTEXITCODE -ne 0) {
+    throw "Private DNS preparation failed; public access was not changed."
+}
+
+Write-Host "Disabling public access to the Container Apps environment..." -ForegroundColor Cyan
+$environmentPatch = @{
+    properties = @{
+        publicNetworkAccess = "Disabled"
+    }
+}
+$environmentPatchFile = Join-Path `
+    ([System.IO.Path]::GetTempPath()) `
+    "genie-environment-network-$([guid]::NewGuid().ToString('N')).json"
+try {
+    $environmentPatch | ConvertTo-Json -Depth 10 | Set-Content `
+        -Path $environmentPatchFile `
+        -Encoding utf8
+    & az rest `
+        --method patch `
+        --uri "$($environment.id)?api-version=2025-10-02-preview" `
+        --body "@$environmentPatchFile" `
+        --only-show-errors `
+        -o none
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to disable Container Apps environment public access."
+    }
+}
+finally {
+    if (Test-Path $environmentPatchFile) {
+        Remove-Item -Path $environmentPatchFile -Force
+    }
+}
+
+Write-Host "Creating the Container Apps private endpoint..." -ForegroundColor Cyan
+Invoke-PrivateEndpointDeployment `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroup $ResourceGroup `
+    -DeploymentName $deploymentName `
+    -TemplateFile $templateFile `
+    -CommonParameters $commonParameters `
+    -PrivateEndpointName $privateEndpointName `
+    -Deadline $deadline
+
+$privateEndpoint = Wait-ForPrivateEndpointApproval `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroup $ResourceGroup `
+    -PrivateEndpointName $privateEndpointName `
+    -Deadline $deadline
+
+$environment = Invoke-AzJson containerapp env show `
+    --subscription $SubscriptionId `
+    --ids $environment.id
+if ($environment.properties.publicNetworkAccess -ne "Disabled") {
+    throw "Container Apps environment public access is not disabled."
+}
+$deadline = (Get-Date).AddSeconds($WaitTimeoutSeconds)
+Wait-ForGatewayReadiness -GatewayUrl $gatewayUrl -Deadline $deadline
+
+$directBackendUrl = "https://$($app.properties.configuration.ingress.fqdn)"
+$directRouteExposed = $false
+try {
+    $directResponse = Invoke-WebRequest `
+        -Method Get `
+        -Uri "$directBackendUrl/health/ready" `
+        -TimeoutSec 30 `
+        -SkipHttpErrorCheck
+    $directRouteExposed = $directResponse.StatusCode -ge 200 -and $directResponse.StatusCode -lt 300
+}
+catch {
+    Write-Host "Direct backend route is unreachable as required: $($_.Exception.Message)"
+}
+if ($directRouteExposed) {
+    throw "Direct Container Apps ingress still accepts public requests."
+}
+
+[pscustomobject]@{
+    apiManagement = $deployment.properties.outputs.apiManagementName.value
+    gatewayUrl = $gatewayUrl
+    containerAppsEnvironment = $environment.name
+    publicNetworkAccess = $environment.properties.publicNetworkAccess
+    privateEndpoint = $privateEndpoint.name
+    gatewayRoute = "verified"
+    directBackendRoute = "denied"
+} | ConvertTo-Json -Depth 10 -Compress
