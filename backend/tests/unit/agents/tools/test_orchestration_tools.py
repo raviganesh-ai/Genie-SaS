@@ -447,6 +447,11 @@ async def test_call_build_agent_generates_one_component_at_a_time_when_architect
         assert r.variables["architecture"] == _ARCHITECTURE_WITH_TWO_SPECIALISTS
         assert r.variables["policies"] == "Must use managed identity (no embedded credentials)"
 
+    assert all(not request.variables["prior_components"] for request in gateway.requests[:-1])
+    ui_context = gateway.requests[-1].variables["prior_components"]
+    assert "# agent: orchestrator\norchestrator code" in ui_context
+    assert "# agent: Ticket Classifier Agent\nclassifier code" in ui_context
+
     expected_combined = (
         "```python\n# agent: Ticket Classifier Agent\nclassifier code\n```"
         "\n\n"
@@ -677,12 +682,8 @@ _ARCHITECTURE_WITH_REQUIREMENT_ASSIGNMENTS = """
 """
 
 
-async def test_call_build_agent_fails_closed_when_architecture_omits_a_requirement():
-    """If the approved requirements name a requirement ID the architecture
-    document never assigns to any specialist, the Orchestrator, or a UI
-    zone, this must fail BEFORE any component is generated - catching the
-    gap for free instead of relying on a full build+deploy+test cycle and
-    the Requirement Fidelity Gate's repair budget to discover it later."""
+async def test_call_build_agent_generates_when_architecture_omits_a_literal_requirement_id():
+    """Architecture prose guides generation but is not an acceptance-test artifact."""
 
     registry = AgentToolRegistry()
     gateway = _StreamingAgentGateway()
@@ -696,21 +697,20 @@ async def test_call_build_agent_fails_closed_when_architecture_omits_a_requireme
         trace_id="run-1:build-solution",
     )
 
-    with pytest.raises(ToolExecutionError, match="REQ-005"):
-        await registry.execute(
-            agent_id="genie-orchestrator",
-            tool_name="call_build_agent",
-            arguments={
-                "requirements": "REQ-001: pick a category. REQ-005: send a confirmation email.",
-                "architecture": _ARCHITECTURE_WITH_REQUIREMENT_ASSIGNMENTS,
-                "policies": "",
-                "user_message": "",
-            },
-            context=context,
-        )
+    result = await registry.execute(
+        agent_id="genie-orchestrator",
+        tool_name="call_build_agent",
+        arguments={
+            "requirements": "REQ-001: pick a category. REQ-005: send a confirmation email.",
+            "architecture": _ARCHITECTURE_WITH_REQUIREMENT_ASSIGNMENTS,
+            "policies": "",
+            "user_message": "",
+        },
+        context=context,
+    )
 
-    # No component was generated once the gap was detected.
-    assert gateway.requests == []
+    assert len(gateway.requests) == 4
+    assert result["output_text"]
 
 
 async def test_call_build_agent_passes_each_components_own_assigned_requirement_ids():

@@ -74,7 +74,7 @@ DEPLOYMENT_STEP_NAMES: dict[DeploymentStepId, str] = {
     "sync-frontend-integration": "Update Frontend Integrations",
     "deploy-frontend-app": "Deploy Frontend",
     "generate-test-suite": "Generate Requirement Acceptance Tests",
-    "execute-test-suite": "Requirement Fidelity Gate",
+    "execute-test-suite": "Requirement Validation",
     "run-security-scan": "Security Scan (Backend & Frontend)",
     "security-copilot-scan": "Microsoft Defender & Security Copilot Scan",
     "finops-cost-report": "Azure FinOps Cost Report",
@@ -101,12 +101,13 @@ class RequirementFidelityItem(BaseModel):
 
 
 class RequirementFidelityReport(BaseModel):
-    """Deterministic launch gate calculated from approved IDs and real test results."""
+    """Deterministic prototype validation from approved IDs and real test results."""
 
     model_config = ConfigDict(extra="forbid")
 
     status: RequirementFidelityStatus = "pending"
     requirements: list[RequirementFidelityItem] = Field(default_factory=list)
+    goal_requirement_ids: list[str] = Field(default_factory=list)
     total_requirements: int = Field(ge=0)
     covered_requirements: int = Field(default=0, ge=0)
     passed_requirements: int = Field(default=0, ge=0)

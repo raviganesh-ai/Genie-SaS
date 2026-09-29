@@ -75,6 +75,16 @@ class FactoryOrchestratorAgent:
         materialize_build(misnamed_output)
 
 
+def test_materialize_build_rejects_nonexistent_asyncio_random_type():
+    output = _SAMPLE_OUTPUT.replace(
+        "class OrchestratorAgent:",
+        "class OrchestratorAgent:\n    def _deterministic_rng(self) -> asyncio.Random:\n        pass",
+    )
+
+    with pytest.raises(MaterializedCodeError, match="asyncio.Random"):
+        materialize_build(output)
+
+
 def test_materialize_build_rejects_exact_uploaded_filename_gate():
     output = _SAMPLE_OUTPUT.replace(
         "export function MissionApp() {",
@@ -107,7 +117,7 @@ def test_materialize_build_allows_non_file_name_comparison():
     "source",
     (
         "const isFileValid = parsedDocCount === 30;",
-        "if (docsArray.length !== 30) { setFileError('wrong count'); }",
+        "if (docsArray.length !== 30) { return null; }",
     ),
 )
 def test_materialize_build_rejects_exact_ui_sample_cardinality_gate(source: str):
@@ -118,6 +128,20 @@ def test_materialize_build_rejects_exact_ui_sample_cardinality_gate(source: str)
 
     with pytest.raises(MaterializedCodeError, match="representative sample"):
         materialize_build(output)
+
+
+def test_materialize_build_allows_exact_count_comparison_for_coverage_warning():
+    output = _SAMPLE_OUTPUT.replace(
+        "export function MissionApp() {",
+        "export function MissionApp() {\n"
+        "    if (parsedDocCount !== 30) {\n"
+        "        setCoverageWarning('This run uses a partial representative sample.');\n"
+        "    }",
+    )
+
+    build = materialize_build(output)
+
+    assert build.ui_component is not None
 
 
 def test_materialize_build_rejects_exact_orchestrator_sample_cardinality_gate():
@@ -144,14 +168,26 @@ def test_materialize_build_allows_non_empty_sample_validation():
     assert build.ui_component is not None
 
 
-def test_materialize_build_rejects_missing_specialist_progress_narration():
+def test_materialize_build_allows_missing_specialist_progress_narration():
     output = _SAMPLE_OUTPUT.replace(
         'await on_progress("Requirements Specialist completed.")',
         'await on_progress("Pipeline phase completed.")',
     )
 
-    with pytest.raises(MaterializedCodeError, match="Requirements Specialist"):
-        materialize_build(output)
+    build = materialize_build(output)
+
+    assert build.orchestrator_module is not None
+
+
+def test_materialize_build_allows_unique_base_name_progress_for_qualified_agent():
+    output = _SAMPLE_OUTPUT.replace(
+        "# agent: Requirements Specialist",
+        "# agent: Requirements Specialist (Primary Reviewer)",
+    )
+
+    build = materialize_build(output)
+
+    assert "Requirements Specialist (Primary Reviewer)" in build.agent_modules
 
 
 def test_materialize_build_rejects_nested_submit_payload():
@@ -428,13 +464,7 @@ def test_backend_service_scaffold_main_py_runs_the_real_orchestrator_pipeline():
     assert 'status_code=503' in main_source
 
 
-def test_backend_scaffold_rejects_structured_request_when_constructor_fails(monkeypatch):
-    """A structured generated-UI request must expose constructor failure.
-
-    DerekPoC exposed this when generated code passed ``FoundryAgent`` a
-    positional argument. Silently converting that failure into a generic
-    conversational response made the broken prototype look successful.
-    """
+def test_backend_scaffold_falls_back_when_generated_pipeline_glue_fails(monkeypatch):
     scaffold = generate_backend_service_scaffold(
         mission_title="Acme Mission",
         orchestrator_agent_name="acme-orchestrator",
@@ -452,8 +482,9 @@ def test_backend_scaffold_rejects_structured_request_when_constructor_fails(monk
     generated_module = types.ModuleType("acme_main_constructor_failure")
     exec(compile(scaffold["main.py"], "main.py", "exec"), generated_module.__dict__)  # noqa: S102
 
-    with pytest.raises(TypeError, match="FoundryAgent"):
-        asyncio.run(generated_module._run_orchestrator_pipeline("{}"))
+    result = asyncio.run(generated_module._run_orchestrator_pipeline("{}"))
+
+    assert result is None
 
 
 def test_backend_scaffold_keeps_conversational_fallback_for_plain_text(monkeypatch):
@@ -476,6 +507,85 @@ def test_backend_scaffold_keeps_conversational_fallback_for_plain_text(monkeypat
     result = asyncio.run(generated_module._run_orchestrator_pipeline("quick question"))
 
     assert result is None
+
+
+def test_backend_stream_returns_fallback_output_when_generated_pipeline_glue_fails(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("FACTORY_WORKING_DIR", str(tmp_path))
+    scaffold = generate_backend_service_scaffold(
+        mission_title="Acme Mission",
+        orchestrator_agent_name="acme-orchestrator",
+        agent_foundry_names={"Requirements Specialist": "acme-requirements-specialist"},
+    )
+    fake_orchestrator_module = types.ModuleType("orchestrator")
+
+    class _MismatchedOrchestratorAgent:
+        async def run(self, _ui_message, on_progress=None):
+            raise ValueError("Run ID / Output directory name is required.")
+
+    fake_orchestrator_module.OrchestratorAgent = _MismatchedOrchestratorAgent
+    monkeypatch.setitem(sys.modules, "orchestrator", fake_orchestrator_module)
+    generated_module = types.ModuleType("acme_main_fallback_stream")
+    monkeypatch.setitem(sys.modules, "acme_main_fallback_stream", generated_module)
+    exec(compile(scaffold["main.py"], "main.py", "exec"), generated_module.__dict__)  # noqa: S102
+
+    class _FakeCredential:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _FakeProjectClient:
+        def __init__(self, *, endpoint, credential):
+            assert endpoint == "https://foundry.example.com/projects/acme"
+            assert isinstance(credential, _FakeCredential)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _FakeFoundryAgent:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self, message, *, tools=None, stream=False):
+            assert "blind_mqm_n30_package.json" in message
+            assert '"documents": []' in message
+            assert tools is None
+            assert stream is True
+            yield types.SimpleNamespace(text="Processed the uploaded representative sample.")
+
+    generated_module.DefaultAzureCredential = _FakeCredential
+    generated_module.AIProjectClient = _FakeProjectClient
+    generated_module.FoundryAgent = _FakeFoundryAgent
+    monkeypatch.setenv("FOUNDRY_ENDPOINT", "https://foundry.example.com/projects/acme")
+    monkeypatch.setenv("FOUNDRY_PROJECT_NAME", "acme")
+
+    async def _collect_events() -> list[dict[str, object]]:
+        request = generated_module.InvokeRequest(
+            message='{"runId":"test-run"}',
+            attachments=[
+                generated_module.Attachment(
+                    name="blind_mqm_n30_package.json", content='{"documents": []}'
+                )
+            ],
+        )
+        return [
+            json.loads(event.removeprefix("data: ").strip())
+            async for event in generated_module._stream_agent_response(request)
+        ]
+
+    events = asyncio.run(_collect_events())
+
+    assert events == [
+        {"delta": "Processed the uploaded representative sample."},
+        {"done": True, "output_text": "Processed the uploaded representative sample."}
+    ]
 
 
 def test_generate_agent_config_module_embeds_the_real_agent_foundry_name_mapping():

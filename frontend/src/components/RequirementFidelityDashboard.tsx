@@ -7,7 +7,7 @@ const FIDELITY_STATUS_LABELS: Record<RequirementFidelityReport["status"], string
   testing: "Testing",
   repairing: "Repairing gaps",
   passed: "100% verified",
-  failed: "Blocked",
+  failed: "Validation gaps",
 };
 
 const EVIDENCE_STATUS_COLORS: Record<RequirementEvidenceStatus, string> = {
@@ -33,11 +33,12 @@ function FidelityMetric({ label, value, tone }: { label: string; value: string; 
 
 /**
  * Renders the real, deterministic per-requirement executable-test coverage
- * and passing-evidence gate (backed by `RequirementFidelityReport`) -
+ * and passing evidence (backed by `RequirementFidelityReport`) -
  * shared between Deploy & Launch's inline view and the standalone
- * Requirement Fidelity Gate popup.
+ * Requirement Validation view.
  */
 export function RequirementFidelityDashboard({ report }: { report: RequirementFidelityReport }): JSX.Element {
+  const goalRequirementIds = new Set(report.goal_requirement_ids ?? []);
   const statusColor =
     report.status === "passed"
       ? "#3fa66a"
@@ -48,7 +49,7 @@ export function RequirementFidelityDashboard({ report }: { report: RequirementFi
           : "#2f83e0";
   return (
     <SectionCard
-      title="Requirement Fidelity Gate"
+      title="Requirement Validation"
       action={
         <Badge shape="rounded" style={{ backgroundColor: statusColor, color: "#0b0f14" }}>
           {FIDELITY_STATUS_LABELS[report.status]}
@@ -60,6 +61,11 @@ export function RequirementFidelityDashboard({ report }: { report: RequirementFi
           label="Approved Requirements"
           value={String(report.total_requirements)}
           tone="#a3c4f3"
+        />
+        <FidelityMetric
+          label="Approved Goals"
+          value={String(goalRequirementIds.size)}
+          tone="#55c2b8"
         />
         <FidelityMetric
           label="Executable Coverage"
@@ -107,9 +113,16 @@ export function RequirementFidelityDashboard({ report }: { report: RequirementFi
                 alignItems: "start",
               }}
             >
-              <Text size={200} weight="bold" style={{ color: EVIDENCE_STATUS_COLORS[item.status] }}>
-                {item.requirement_id}
-              </Text>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 5 }}>
+                <Text size={200} weight="bold" style={{ color: EVIDENCE_STATUS_COLORS[item.status] }}>
+                  {item.requirement_id}
+                </Text>
+                {goalRequirementIds.has(item.requirement_id) ? (
+                  <Badge size="small" appearance="outline" color="informative">
+                    Mission goal
+                  </Badge>
+                ) : null}
+              </div>
               <Text size={200}>{item.statement}</Text>
               <Text size={100} style={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
                 {item.test_names.length > 0 ? item.test_names.join("\n") : "Missing"}
@@ -123,9 +136,9 @@ export function RequirementFidelityDashboard({ report }: { report: RequirementFi
       </div>
 
       {report.gaps.length > 0 ? (
-        <MessageBar intent="error" layout="multiline" style={{ marginTop: 14 }}>
+        <MessageBar intent="warning" layout="multiline" style={{ marginTop: 14 }}>
           <MessageBarBody>
-            <MessageBarTitle>Launch blocked by requirement gaps</MessageBarTitle>
+            <MessageBarTitle>Prototype launched with validation gaps</MessageBarTitle>
             {report.gaps.join("; ")}
           </MessageBarBody>
         </MessageBar>

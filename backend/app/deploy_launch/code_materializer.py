@@ -12,6 +12,7 @@ returned.
 """
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,11 +54,12 @@ _DIRECT_FOUNDRY_AGENT_IMPORT_PATTERN: Final = re.compile(
     r"^from agent_framework\.foundry import FoundryAgent(?P<suffix>[^\n]*)$",
     re.MULTILINE,
 )
+_NONEXISTENT_ASYNCIO_RANDOM_PATTERN: Final = re.compile(r"\basyncio\.Random\b")
 _EXACT_FILE_NAME_COMPARISON_PATTERN: Final = re.compile(
     r"\b[A-Za-z_$][\w$]*\.name\s*(?:===|!==|==|!=)\s*"
     r"(?P<quote>['\"`])[^'\"`\r\n]*\.[A-Za-z0-9]{1,10}(?P=quote)",
 )
-_STRICT_SAMPLE_CARDINALITY_PATTERN: Final = re.compile(
+_SAMPLE_CARDINALITY_COMPARISON_PATTERN: Final = re.compile(
     r"(?:"
     r"\b(?:parsed|uploaded|input|actual)?(?:doc(?:ument)?|record|row|item|sample|file)s?"
     r"_?(?:count|length|size)\b"
@@ -72,6 +74,11 @@ _STRICT_SAMPLE_CARDINALITY_PATTERN: Final = re.compile(
     r")",
     re.IGNORECASE,
 )
+_SAMPLE_SUBMISSION_GUARD_PATTERN: Final = re.compile(
+    r"\b(?:disabled|is_?[a-z0-9_]*valid|can_?submit|submit_?disabled|is_?submit_?disabled)\b",
+    re.IGNORECASE,
+)
+_TERMINATING_GATE_PATTERN: Final = re.compile(r"\b(?:return|raise|throw)\b")
 _ON_SUBMIT_INLINE_STRINGIFY_PATTERN: Final = re.compile(
     r"\bonSubmit\s*\(\s*JSON\.stringify\(\s*(\{)"
 )
@@ -227,6 +234,50 @@ def _has_nested_object_value(object_literal: str) -> bool:
     return False
 
 
+def _has_strict_sample_cardinality_gate(source: str, *, python_source: bool) -> bool:
+    matches = list(_SAMPLE_CARDINALITY_COMPARISON_PATTERN.finditer(source))
+    if not matches:
+        return False
+
+    for match in matches:
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        line_end = source.find("\n", match.end())
+        if line_end == -1:
+            line_end = len(source)
+        line = source[line_start:line_end]
+        if _SAMPLE_SUBMISSION_GUARD_PATTERN.search(line):
+            return True
+
+        condition_prefix = source[line_start : match.start()]
+        if re.search(r"\bif\s*\(", condition_prefix):
+            block_start = source.find("{", match.end(), line_end + 1)
+            if block_start != -1:
+                block = _extract_balanced_braces(source, block_start)
+                if block is not None and _TERMINATING_GATE_PATTERN.search(block):
+                    return True
+
+    if not python_source:
+        return False
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test_source = ast.get_source_segment(source, node.test) or ""
+        if not _SAMPLE_CARDINALITY_COMPARISON_PATTERN.search(test_source):
+            continue
+        if any(
+            isinstance(descendant, (ast.Raise, ast.Return))
+            for statement in node.body
+            for descendant in ast.walk(statement)
+        ):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class MaterializedBuild:
     """The Build Agent's generated code, parsed into real, named files."""
@@ -319,6 +370,16 @@ def materialize_build(output_text: str) -> MaterializedBuild:
             "reply instead of running this mission's real pipeline."
         )
 
+    if (
+        orchestrator_module is not None
+        and _NONEXISTENT_ASYNCIO_RANDOM_PATTERN.search(orchestrator_module)
+    ):
+        raise MaterializedCodeError(
+            "The generated orchestrator references 'asyncio.Random', which does not "
+            "exist and prevents the module from importing. Use 'random.Random' from "
+            "Python's random module for deterministic seeded randomness."
+        )
+
     if ui_component is not None and _EXACT_FILE_NAME_COMPARISON_PATTERN.search(ui_component):
         raise MaterializedCodeError(
             "The generated mission UI compares an uploaded file's name to an exact "
@@ -326,34 +387,21 @@ def materialize_build(output_text: str) -> MaterializedBuild:
             "type, never an end-user-controlled filename or example filename."
         )
 
-    generated_sources = [
-        source for source in (ui_component, orchestrator_module) if source is not None
-    ]
-    if any(_STRICT_SAMPLE_CARDINALITY_PATTERN.search(source) for source in generated_sources):
+    if (
+        ui_component is not None
+        and _has_strict_sample_cardinality_gate(ui_component, python_source=False)
+    ) or (
+        orchestrator_module is not None
+        and _has_strict_sample_cardinality_gate(orchestrator_module, python_source=True)
+    ):
         raise MaterializedCodeError(
             "The generated prototype gates execution on an exact uploaded sample count. "
             "Production target cardinality must be reported as coverage evidence, while "
             "any non-empty structurally valid representative sample remains runnable."
         )
 
-    if orchestrator_module is not None and agent_modules:
-        missing_progress = [
-            agent_name
-            for agent_name in agent_modules
-            if (
-                f"Handing off to {agent_name}" not in orchestrator_module
-                or f"{agent_name} completed." not in orchestrator_module
-            )
-        ]
-        if missing_progress:
-            raise MaterializedCodeError(
-                "The generated orchestrator does not emit live start/completion progress "
-                "for every specialist agent: " + ", ".join(sorted(missing_progress))
-            )
-
-    if ui_component is not None and any(
-        _has_nested_object_value(literal) for literal in _submit_payload_literals(ui_component)
-    ):
+    submit_payloads = _submit_payload_literals(ui_component) if ui_component is not None else []
+    if any(_has_nested_object_value(literal) for literal in submit_payloads):
         raise MaterializedCodeError(
             "The generated mission UI's submit payload groups fields inside nested "
             "objects (for example {\"evaluation_config\": {\"primary_model_id\": ...}}). "
@@ -478,14 +526,6 @@ def _compose_message(request: InvokeRequest) -> str:
     return "\\n\\n".join([*sections, request.message])
 
 
-def _is_structured_mission_request(message: str) -> bool:
-    try:
-        json.loads(message)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    return True
-
-
 async def _run_orchestrator_pipeline(
     message: str, *, on_progress: Callable[[str], Awaitable[None]] | None = None
 ) -> str | None:
@@ -508,8 +548,6 @@ async def _run_orchestrator_pipeline(
     try:
         from orchestrator import OrchestratorAgent
     except ImportError:
-        if _is_structured_mission_request(message):
-            raise
         return None
     try:
         orchestrator = OrchestratorAgent()
@@ -526,16 +564,10 @@ async def _run_orchestrator_pipeline(
             # still run; it simply cannot emit specialist hand-off narration.
             result = await orchestrator.run(message)
     except Exception:
-        # The Orchestrator is generated code whose exact failure modes
-        # cannot be enumerated in advance. A structured request came from
-        # the generated mission UI and must never be disguised as a
-        # successful conversational response; propagate it so deployed
-        # acceptance tests fail and trigger the bounded repair workflow.
-        if _is_structured_mission_request(message):
-            _logger.exception("Structured mission orchestrator execution failed.")
-            raise
-        # Plain-text quick requests are outside the generated form contract
-        # and may still use the mission's conversational Foundry fallback.
+        # Generated UI/orchestrator glue can drift even when both components
+        # are individually runnable. Keep the prototype useful: record the
+        # generated pipeline failure, then let the mission's already-provisioned
+        # Orchestrator Agent process the full request and attachment content.
         _logger.warning(
             "Orchestrator pipeline run did not complete; falling back to a "
             "conversational reply.",

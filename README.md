@@ -187,10 +187,10 @@ This is the "how": the exact mechanism Genie uses to turn an uploaded transcript
 | **1. Ingest** | Transcript, recording, or document enters the session scope | Upload validation |
 | **2. Requirements** | Requirements Analyst classifies scope and creates the numbered critical path | Human approval |
 | **3. Architecture** | Architecture Designer produces the multi-agent workflow and single-page UI design | Human approval |
-| **4. Build** | Build Agent generates one traceable component at a time | Requirement-fidelity validation |
+| **4. Build** | Build Agent generates one traceable component at a time | Automatic repair for code that cannot run |
 | **5. Assess and test** | Security Assessment and Test Generation run independently | `SECURITY_GATE` and `TEST_COVERAGE_GATE` |
 | **6. Workshop** | Peer-review findings and selected fixes are reconciled | Human approval |
-| **7. Deploy & Launch** | The deterministic pipeline provisions the isolated Azure prototype | At least 90% executable coverage and 100% of executable tests passing |
+| **7. Deploy & Launch** | The deterministic pipeline provisions the isolated Azure prototype | Launches with visible validation gaps after bounded repair; only technical, security, authorization, or deployment failures block |
 
 ### 1. Requirements are pinned into a single scope contract
 
@@ -209,7 +209,7 @@ The prompt is explicit: *"Stay strictly within the 'Critical path:' scope... tre
 
 `call_build_agent` (`app/agents/tools/orchestration_tools.py`) invokes the Build Agent **once per component** (`build-generation-component-v1`), in a fixed bottom-up order: each specialist agent module (alphabetical), then the Orchestrator module, then the UI component. The prompt hard-constrains every component to the architecture's own list: *"Every zone and every agent you generate code for MUST come directly from that exact list below — never invent, add, rename, or merge."* The UI component must implement **only** the input zones named in step 2, using the same deterministic control-mapping rule, styled with Genie's own shell classes (`genie-card`, `genie-zone-title`, `genie-btn-primary`, `genie-dropzone`) and a fixed contract (`{ onSubmit: (message, attachments?) => void }`) — it never renders its own progress/output/agent-status UI, because the shell already does. On a retried build, `previous_build_output` lets the tool skip regenerating any component that already succeeded rather than rebuilding the whole mission from scratch. Users can also request a targeted change to a single already-generated component from Workshop Center (`WorkshopService.regenerate_component`, prompt `build-component-regeneration-v1`) without touching anything else.
 
-Which requirement IDs belong to which component is never left purely to the Build Agent's own judgment. `architecture_parsing.parse_component_requirement_assignments` deterministically extracts the `REQ-###` ids already cited in each specialist/UI bullet's own text (the Architecture Designer prompt requires this), and `call_build_agent` (1) fails closed with a governed error **before generating any component** if an approved requirement is never assigned to any specialist, the Orchestrator, or a UI zone, and (2) passes each component only its own assigned requirement ids via the `{assigned_requirements}` prompt variable — cheaper and more reliable than discovering a coverage gap only after a full build+deploy+test cycle.
+When architecture prose includes `REQ-###` ids, `architecture_parsing.parse_component_requirement_assignments` uses them to give each component focused context through `{assigned_requirements}`. Missing literal ids do not block Architecture or Build; the full approved requirements remain available to generation, and deployed behavior is validated independently.
 
 The generated orchestrator module has one more fail-closed contract: `code_materializer.materialize_build` rejects the parsed build with a `MaterializedCodeError` unless it defines the exact literal class `class OrchestratorAgent:` — the deterministic backend scaffold (`_MAIN_PY_TEMPLATE`) hardcodes `from orchestrator import OrchestratorAgent`, so a misnamed class would otherwise deploy a prototype whose backend never actually runs the generated business logic. This is enforced at materialization time (before any deploy), on top of the `build-generation-component-v1` prompt's own instruction to name the class correctly.
 
@@ -236,12 +236,14 @@ Deploy & Launch is deliberately **not** an LLM-narrative workflow step — it is
 | 2 | `provision-foundry-agents` | Deploy Agents to Foundry | Provisions each generated specialist + orchestrator agent as a real Azure AI Foundry resource |
 | 3 | `deploy-backend-service` | Deploy Backend Service | Provisions a prototype-owned VNet, private DNS zone, internal Container Apps environment, and dedicated Standard v2 API Management service; builds FastAPI; and enables app-boundary ingress inside the internal environment. APIM is the only public API endpoint and reaches FastAPI only over the prototype private network |
 | 4 | `sync-frontend-integration` | Update Frontend Integrations | Wires the generated anonymous UI to the dedicated APIM endpoint; no Entra, MSAL, bearer-token, or acceptance-key runtime configuration is generated |
-| 5 | `deploy-frontend-app` | Deploy Frontend | Builds the mission UI under Node 22, runs the pinned Apache-2.0 Impeccable `3.6.0` detector over generated TSX/CSS, fails closed on deterministic design anti-patterns, provisions a prototype-owned public Consumption Container Apps environment, then deploys a mission-specific frontend Container App. APIM's deny-by-default bootstrap CORS origin is replaced with the returned exact HTTPS origin |
-| 6 | `generate-test-suite` | Generate Requirement Acceptance Tests | Test Generation Agent writes real black-box tests against the deployed prototype's actual mission URLs (no mocks/patches), targeting every approved requirement id. `MISSION_BACKEND_URL` is the dedicated HTTPS APIM endpoint and generated code receives no authentication credential. A requirement-coverage repair loop retries omitted IDs up to `GENIE_DEPLOYMENT_FIDELITY_MAX_REPAIR_ATTEMPTS`; after that, executable coverage must meet `GENIE_DEPLOYMENT_FIDELITY_MIN_COVERAGE_PERCENT` (default 90%) and every omitted ID remains an explicit fidelity gap. For a real deployed backend, `validate_real_action_tests` also rejects test doubles in place of real HTTP calls |
-| 7 | `execute-test-suite` | Requirement Fidelity Gate | Generated tests call the dedicated APIM endpoint directly without Entra or an acceptance key. Launch requires the configured executable-coverage threshold and 100% passing evidence for all executable requirement tests. Failed, errored, skipped, timed-out, or unobserved executable tests still trigger automatic regeneration and redeployment up to `GENIE_DEPLOYMENT_FIDELITY_MAX_REPAIR_ATTEMPTS` times (default 3), then fail closed |
-| 8 | `launch-mission` | Launch | Mints the customer-facing launch link immediately after executable coverage meets the configured threshold (default 90%) and all executable evidence passes |
+| 5 | `deploy-frontend-app` | Deploy Frontend | Builds the mission UI under Node 22, runs the pinned Apache-2.0 Impeccable `3.6.0` detector over generated TSX/CSS as advisory quality feedback, provisions a prototype-owned public Consumption Container Apps environment, then deploys a mission-specific frontend Container App. APIM's deny-by-default bootstrap CORS origin is replaced with the returned exact HTTPS origin |
+| 6 | `generate-test-suite` | Generate Requirement Acceptance Tests | Test Generation Agent writes real black-box tests against the deployed prototype's actual mission URLs (no mocks/patches), targeting every approved requirement id. Missing, malformed, mock-based, or weak goal tests trigger bounded correction; unresolved issues remain explicit validation gaps and do not hide the deployed prototype |
+| 7 | `execute-test-suite` | Requirement Validation | Generated tests call the dedicated APIM endpoint directly. Failures, timeouts, and missing goal evidence trigger automatic regeneration and redeployment up to `GENIE_DEPLOYMENT_FIDELITY_MAX_REPAIR_ATTEMPTS`; exhausted or failed repair remains visible as validation evidence rather than blocking Launch |
+| 8 | `launch-mission` | Launch | Mints the customer-facing launch link for the deployed prototype and identifies any remaining validation gaps |
 
-Each step's real status (`pending` → `running` → `completed`/`failed`/`skipped`) streams live to the Deploy & Launch page so the human watches actual provisioning happen — never a simulated progress bar. The **Requirement Fidelity Gate** (step 7) is Genie's last line of defense: it never trusts the Build Agent's or Test Generation Agent's own claims of completeness, it only trusts pytest actually passing against the real running prototype.
+Each step's real status (`pending` → `running` → `completed`/`failed`/`skipped`) streams live to the Deploy & Launch page so the human watches actual provisioning happen — never a simulated progress bar. **Requirement Validation** (step 7) never trusts generated claims of completeness: it records real pytest outcomes, attempts bounded repair, and leaves unresolved gaps visible without withholding an otherwise working prototype.
+
+Prototype backend and frontend Container App names preserve the readable `genie-<mission>-<component>` form when it fits Azure's 32-character limit. Longer workload names are shortened deterministically with a collision-resistant hash; deployment and governed cleanup use the same derived name.
 
 ---
 
@@ -384,9 +386,9 @@ All backend configuration is via environment variables prefixed `GENIE_` (pydant
 | `GENIE_DEFAULT_LLM` | `gpt-5.1` | Default model deployment name for agents that omit `model_deployment_ref` |
 | `GENIE_DEBUGGING_WORKFLOW_ID` | `debugging-workflow` | Workflow id run on `FailureDetected` |
 | `GENIE_REQUIREMENTS_QUALIFICATION_STEP_ID` | `analyze-requirements` | Workflow step id whose output is checked for an agentic-workflow qualification verdict |
-| `GENIE_DEPLOYMENT_FIDELITY_MAX_REPAIR_ATTEMPTS` | `3` | Max automatic regenerate-and-redeploy attempts the Requirement Fidelity Gate makes before failing closed |
-| `GENIE_DEPLOYMENT_FIDELITY_MIN_COVERAGE_PERCENT` | `90` | Minimum approved-requirement percentage with executable acceptance tests required for launch; every executable test must still pass and uncovered requirement IDs remain visible as gaps |
-| `GENIE_DEPLOYMENT_TEST_EXECUTION_TIMEOUT_SECONDS` | `300` | Max seconds the Requirement Fidelity Gate's real pytest subprocess (real black-box HTTP acceptance tests against the live deployed prototype, one per approved requirement) is allowed to run before being killed |
+| `GENIE_DEPLOYMENT_FIDELITY_MAX_REPAIR_ATTEMPTS` | `3` | Max automatic regenerate-and-redeploy attempts Requirement Validation makes before launching with visible gaps |
+| `GENIE_DEPLOYMENT_FIDELITY_MIN_COVERAGE_PERCENT` | `90` | Target percentage of approved requirements with executable acceptance tests; uncovered requirement IDs remain visible as gaps |
+| `GENIE_DEPLOYMENT_TEST_EXECUTION_TIMEOUT_SECONDS` | `300` | Max seconds Requirement Validation allows its real black-box pytest subprocess before recording a timeout gap |
 | `GENIE_PROTOTYPE_API_GATEWAY_ENABLED` | `false` | Enables a dedicated Azure API Management service and private runtime network for every newly deployed prototype; mandatory (`true`) in production |
 | `GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL` | *(none)* | Required APIM publisher contact email supplied as external deployment configuration |
 | `GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME` | *(none)* | Required APIM publisher display name supplied as external deployment configuration |
@@ -691,11 +693,73 @@ The script uses Microsoft Entra authentication, creates only missing model deplo
 
 Every deployment to the shared Azure evaluation environment (backend Container App and/or frontend Static Web App) is recorded here: commit, what changed, and why. Update this section as part of the same commit that ships the fix/feature, before pushing to `master` triggers [Continuous deployment](#continuous-deployment-github-actions).
 
+### 2026-09-29 — Orchestrator prompts must surface specialist stage failures instead of silently swallowing them
+
+- **Incident**: the live `sampl-989d7318` blind-MQM translation-QA mission was given a valid, correctly-formatted uploaded package and its generated Orchestrator ran to completion, but returned a well-formed, entirely empty result (0 documents processed, 0 experiments, null system winner, all 7 required languages reported as "missing"). The existing COVERAGE VALIDATION contract faithfully reported the gap, but could not distinguish "the input genuinely had none of the required items" from "an upstream specialist agent's call raised and was silently caught".
+- **Prompt fix, not a patch to the deployed prototype**: both `build-generation-v1` and `build-generation-component-v1` gained a STAGE FAILURE TRANSPARENCY instruction requiring generated Orchestrators to never wrap a specialist agent's call in a broad try/except that swallows an exception into an empty/default result. Any caught specialist-agent failure must be captured into the returned `dict` as `"stage_errors"`, narrated via `on_progress` so the live UI shows it, and must set `"success": false` — so a broken pipeline is never indistinguishable from a plain empty-input success. This applies to all future generated missions; the already-deployed Sampl prototype instance itself was left unmodified.
+- **Verification**: a new regression test (`test_orchestrator_prompts_require_surfacing_specialist_stage_failures`) pins the presence of this instruction and its required JSON keys in both prompts; the full prompt-contract and registry test suites (65 tests) pass.
+
+### 2026-09-29 — Connect generated UI and backend by construction
+
+- **Sample integration fix**: the Sample prototype UI submitted shorthand JSON fields such as `runId`, while its generated orchestrator read different names such as `runIdOutputDirectoryName`; the backend therefore failed before its first stream event and the UI reported that it returned no output.
+- **No new gate**: UI generation now receives the already-generated orchestrator source as authoritative context and uses its exact request keys directly. Genie does not add a new validation stage or withhold a prototype over component naming.
+- **Prototype stays useful**: if generated pipeline glue still cannot accept a request, the mission backend records the error and uses its existing Orchestrator Agent fallback with the full uploaded sample content instead of returning an empty stream.
+- **Portable regression coverage**: the structured-upload fallback test uses the generated backend's configured working directory with isolated temporary storage on both Linux CI and Windows development hosts.
+
+### 2026-09-29 — Fix generated prototype frontend manifests
+
+- **Valid package metadata**: generated prototype frontends now serialize `package.json` from structured data, preserving the quoted nonblocking Impeccable command as valid JSON.
+- **Observed failure fixed**: SampleDemo ACR runs `chdg` through `chdk` failed at `npm install` with `EJSONPARSE`; the generated application code was never reached.
+
+### 2026-09-28 — Keep prototyping stages moving
+
+- **Prototype-first flow**: generated acceptance-test formatting, missing coverage, weak evidence, test failures, timeouts, and exhausted fidelity repair no longer withhold an already deployed prototype. Genie launches it with explicit validation gaps.
+- **Repair and truth preserved**: requirement and goal checks still run, trigger bounded regeneration, and cannot falsely become passing evidence when a generated suite uses mocks or fails real-action validation.
+- **Advisory visual lint**: Impeccable still inspects every generated frontend and reports findings, but styling guidance no longer stops a buildable prototype from deploying.
+- **Best-effort progress narration**: missing exact specialist hand-off phrases may reduce Agent Pipeline animation detail, but no longer blocks otherwise runnable generated code.
+- **Real blockers only**: unreadable input, unavailable Foundry execution, denied authorization or governance decisions, generated code that cannot run, high/critical security findings, and failed Azure provisioning remain blocking because no safe working prototype exists.
+
+### 2026-09-28 — Judge the prototype, not architecture formatting
+
+- **Unblocked generation**: Architecture and generated source no longer fail merely because their text omits one or more literal approved `REQ-*` identifiers, and component generation no longer repeats that precheck before invoking the Build Agent.
+- **Intelligent responsibility split**: approved requirements and goals continue to guide architecture and generation, while semantic fidelity is established by the generated implementation and real deployed outcome evidence rather than ID repetition in an intermediate document.
+- **Meaningful safeguards preserved**: incomplete or failed generated components remain blocked; approved-goal and supporting-requirement gaps remain visible and drive bounded repair.
+
+### 2026-09-28 — Make approved goals non-negotiable
+
+- **Goal completeness**: every approved goal now requires its own dedicated end-to-end test and passing evidence, even when aggregate requirement coverage has already met the configured threshold. The threshold remains unchanged for non-goal requirements, avoiding a broader restriction.
+- **Evidence quality**: generated goal tests are rejected when they contain only constant, HTTP-status, or nonempty-JSON assertions. Domain assertions may remain in local helper functions, preserving normal test organization.
+- **Repair behavior**: a missing goal enters the bounded test-generation repair loop; if the gap persists, Launch continues with that gap explicitly recorded.
+
+### 2026-09-28 — Prove the approved mission goal end to end
+
+- **Goal-preserving generation**: Requirement Agent goals now receive stable `REQ-*` IDs and observable outcomes; architecture and build prompts must preserve each exact approved goal through the specialist workflow and generated orchestrator result.
+- **Dedicated outcome evidence**: goal requirements pass fidelity coverage only through real black-box tests named `test_goal_req_<id>_<outcome>`. Metadata, configuration, schema, nonempty output, and HTTP status alone cannot satisfy the mission goal. The fidelity dashboard identifies approved goals separately from supporting requirements.
+- **Startup safety**: generated orchestrators that reference the nonexistent `asyncio.Random` type are rejected during materialization, before Azure deployment, with guidance to use `random.Random`.
+
+### 2026-09-28 — Reject generated request-schema drift before deployment
+
+- **Incident**: an MSFT-Genie prototype UI submitted `runNameTag`, while its generated orchestrator required `runName`; runtime validation correctly failed the request, but only after Azure resources had been provisioned and the UI was exercised.
+- **Pre-deployment contract gate**: materialization now compares statically generated flat UI payload keys with the keys read from `json.loads(ui_message)`, including one-hop validation helpers, and rejects missing or differently cased keys before Foundry-agent or Container App deployment begins.
+- **Validation preserved**: generated runtime type, range, package, and policy checks remain unchanged. Regression coverage proves the mismatched contract is rejected and a matching helper-based contract remains valid.
+
+### 2026-09-28 — Keep generated Container App names Azure-valid
+
+- **Length-safe naming**: backend and frontend Container App names now respect Azure's 32-character limit. Existing short names are unchanged; only overlength workload names receive deterministic truncation plus a collision-resistant hash.
+- **Lifecycle consistency**: deployment and governed cleanup derive the same component name, preventing both provisioning failures and orphaned resources for long workload titles.
+- **Regression coverage**: tests reproduce the `interal-demo-c0d89e27` failure, verify Azure's full naming contract, prevent truncation collisions, and preserve existing short-name behavior.
+
+### 2026-09-28 — Prevent false generated-build repair loops
+
+- **Gate-aware sample validation**: exact target-count comparisons are rejected only when they disable submission or terminate execution. Warning-only comparisons that report representative-sample coverage no longer force pointless Build Agent regeneration.
+- **Qualified agent progress**: specialist labels with trailing role qualifiers, such as `Evaluator (Primary Judge)`, may use their unique base name in live hand-off narration. Mission Control applies collision-safe alias matching when narration is available.
+- **Actionable retries**: deterministic validation failures now include the actual failed contract in the displayed Deploy & Launch step while automatic repair runs, rather than showing only a generic regeneration message.
+
 ### 2026-09-28 — Keep generated POCs testable with representative samples
 
 - **Sample-friendly execution**: Build prompts now require generated UIs and orchestrators to process any non-empty, structurally valid representative sample end to end. Production target counts remain visible as required/processed/gap coverage evidence instead of blocking submit or stopping the agent pipeline.
-- **Visible agent work**: generated orchestrators must contain exact start and completion narration for every specialist agent, ensuring the Agent Pipeline can light up node by node during real processing.
-- **Deterministic generation gate**: materialization rejects exact uploaded-item cardinality gates and missing specialist progress narration before a broken prototype can deploy; focused unit and real-prompt contract tests cover both rules.
+- **Visible agent work**: Build prompts request start and completion narration for every specialist agent so the Agent Pipeline can light up node by node during real processing; missing narration is advisory.
+- **Deterministic generation safeguard**: materialization rejects exact uploaded-item cardinality gates that would prevent representative samples from running; focused unit and real-prompt contract tests cover the rule.
 
 ### 2026-09-27 — Preserve workflow handoffs across revisions
 
@@ -817,10 +881,10 @@ Every deployment to the shared Azure evaluation environment (backend Container A
 
 ### 2026-09-11 — Fidelity launches directly; generated UIs use Impeccable
 
-- **Direct launch decision**: a Deploy & Launch run now proceeds directly from the Requirement Fidelity Gate to Launch once executable coverage meets the configured threshold (default 90%) and all generated executable evidence passes. `run-security-scan` remains a legacy deserialization value for historical persisted runs, but is no longer created or executed for new runs, so it cannot block or appear to loop an otherwise working prototype.
+- **Direct launch sequence**: a Deploy & Launch run proceeds directly from Requirement Validation to Launch. This release originally required the configured evidence threshold; the newer prototype-first behavior documented above supersedes that restriction and launches with visible validation gaps. `run-security-scan` remains a legacy deserialization value for historical persisted runs.
 - **Security posture**: the earlier independent Security Assessment Agent review remains part of build governance. Runtime readiness and black-box acceptance tests still fail closed before launch; this change removes only the redundant post-fidelity static-scan gate from the provisioning sequence.
-- **Professional prototype UI decision**: generated mission UIs must follow the [Impeccable](https://impeccable.style/) design methodology. Both Build Agent generation paths and targeted UI regeneration already carry the Impeccable design contract, and every generated frontend pins `impeccable@3.6.0` and runs `impeccable detect MissionApp.tsx src/` before Vite builds it. This is an executable quality gate, not a styling suggestion.
-- **Verification**: focused pipeline tests prove that an injected blocking scanner is never called and that the final two steps are Requirement Fidelity Gate → Launch. Frontend type checking and build verify the displayed mission trace matches the backend order.
+- **Professional prototype UI decision**: generated mission UIs follow the [Impeccable](https://impeccable.style/) design methodology. Both Build Agent generation paths and targeted UI regeneration carry the design contract, and every generated frontend pins `impeccable@3.6.0` and runs `impeccable detect MissionApp.tsx src/` before Vite builds it. The newer prototype-first behavior documented above makes detector findings advisory.
+- **Verification**: focused pipeline tests prove that an injected blocking scanner is never called and that the final two steps are Requirement Validation → Launch. Frontend type checking and build verify the displayed mission trace matches the backend order.
 
 ### 2026-09-11 — Mission agents use the user's approved model; the Build Agent gets a real model catalog
 

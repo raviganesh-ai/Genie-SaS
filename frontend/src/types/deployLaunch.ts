@@ -30,7 +30,7 @@ export const DEPLOYMENT_STEP_NAMES: Record<DeploymentStepId, string> = {
   "sync-frontend-integration": "Update Frontend Integrations",
   "deploy-frontend-app": "Deploy Frontend",
   "generate-test-suite": "Generate Requirement Acceptance Tests",
-  "execute-test-suite": "Requirement Fidelity Gate",
+  "execute-test-suite": "Requirement Validation",
   "run-security-scan": "Security Scan (Backend & Frontend)",
   "launch-mission": "Launch",
 };
@@ -80,6 +80,7 @@ export interface RequirementFidelityItem {
 export interface RequirementFidelityReport {
   status: RequirementFidelityStatus;
   requirements: RequirementFidelityItem[];
+  goal_requirement_ids: string[];
   total_requirements: number;
   covered_requirements: number;
   passed_requirements: number;
