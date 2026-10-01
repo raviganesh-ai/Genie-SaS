@@ -58,6 +58,24 @@ export function DependencyMappingPage(): JSX.Element {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<SafeError | null>(null);
 
+  const runAssessmentFor = useCallback(
+    async (bindingId: string) => {
+      if (!sessionId || !bindingId) return;
+      setRunning(true);
+      setError(null);
+      try {
+        setAssessment(await repositoryConnectionApi.createAssessment(sessionId, bindingId));
+      } catch (err) {
+        setError(
+          err instanceof ApiError ? err : { message: "The live repository assessment failed." },
+        );
+      } finally {
+        setRunning(false);
+      }
+    },
+    [sessionId],
+  );
+
   const load = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
@@ -72,36 +90,35 @@ export function DependencyMappingPage(): JSX.Element {
           binding.status === "approved" &&
           (binding.purpose === "code" || binding.purpose === "architecture"),
       );
+      const firstBindingId = activeBindings[0]?.id ?? "";
       setBindings(activeBindings);
-      setSelectedBindingId((current) => current || activeBindings[0]?.id || "");
-      setAssessment(assessments[0] ?? null);
+      setSelectedBindingId((current) => current || firstBindingId);
+      const existingAssessment = assessments[0] ?? null;
+      setAssessment(existingAssessment);
+      // Auto-run the assessment the first time this page is reached with an
+      // approved binding and no prior run - the user already expressed this
+      // intent by clicking "Continue to dependency mapping"; requiring a
+      // second, separate "Run" click for the same ask is redundant.
+      if (!existingAssessment && firstBindingId) {
+        setLoading(false);
+        await runAssessmentFor(firstBindingId);
+        return;
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err : { message: "Unable to load dependency mapping." });
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, runAssessmentFor]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const runAssessment = useCallback(async () => {
-    if (!sessionId || !selectedBindingId) return;
-    setRunning(true);
-    setError(null);
-    try {
-      setAssessment(
-        await repositoryConnectionApi.createAssessment(sessionId, selectedBindingId),
-      );
-    } catch (err) {
-      setError(
-        err instanceof ApiError ? err : { message: "The live repository assessment failed." },
-      );
-    } finally {
-      setRunning(false);
-    }
-  }, [sessionId, selectedBindingId]);
+  const runAssessment = useCallback(
+    () => runAssessmentFor(selectedBindingId),
+    [runAssessmentFor, selectedBindingId],
+  );
 
   const graph = useMemo(() => {
     if (!assessment) return { nodes: [] as Node[], edges: [] as Edge[] };
