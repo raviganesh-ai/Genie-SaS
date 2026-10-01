@@ -1,7 +1,6 @@
 """Commit-pinned standards ingestion, classification, and conformance."""
 from __future__ import annotations
 
-import base64
 import hashlib
 import re
 from collections import defaultdict, deque
@@ -52,6 +51,93 @@ _COMMON_WORDS = {
     "required",
     "optional",
 }
+
+
+def classify_markdown_rules(
+    *,
+    repository_full_name: str,
+    resolved_commit: str,
+    path: str,
+    content: str,
+    content_hash: str,
+) -> list[ArchitectureStandardRule]:
+    """Classifies one Markdown file's statements into mandatory/preferred/
+    advisory/example/superseded rules. Module-level (not a StandardsService
+    method) so app.platform_config.service's platform-level, non-session-
+    scoped standards ingestion can reuse the exact same classification
+    logic instead of duplicating it."""
+
+    rules: list[ArchitectureStandardRule] = []
+    heading = PurePosixPath(path).name
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        line = raw_line.strip()
+        if line.startswith("#"):
+            heading = line.lstrip("#").strip() or heading
+            continue
+        statement = re.sub(r"^[-*+]\s+|^\d+[.)]\s+", "", line).strip()
+        if not statement:
+            continue
+        lowered = statement.lower()
+        if any(word in lowered for word in ("superseded", "deprecated", "obsolete")):
+            classification = "superseded"
+        elif re.search(r"\b(must|shall|required)\b", lowered):
+            classification = "mandatory"
+        elif re.search(r"\b(should|recommended)\b", lowered):
+            classification = "preferred"
+        elif re.search(r"\b(may|optional)\b", lowered):
+            classification = "advisory"
+        else:
+            classification = "example"
+        rule_id = hashlib.sha256(
+            f"{resolved_commit}:{path}:{line_number}:{statement}".encode()
+        ).hexdigest()[:24]
+        rules.append(
+            ArchitectureStandardRule(
+                id=rule_id,
+                title=heading,
+                statement=statement,
+                classification=classification,
+                citation=StandardCitation(
+                    repository_full_name=repository_full_name,
+                    commit=resolved_commit,
+                    path=path,
+                    line=line_number,
+                    content_hash=content_hash,
+                ),
+            )
+        )
+    return rules
+
+
+def find_rule_conflicts(rules: list[ArchitectureStandardRule]) -> list[StandardsConflict]:
+    """Module-level counterpart to classify_markdown_rules - see its docstring."""
+
+    grouped: dict[str, list[ArchitectureStandardRule]] = defaultdict(list)
+    for rule in rules:
+        normalized = _MODAL_PATTERN.sub("", rule.statement.lower())
+        normalized = re.sub(r"\bnot\b", "", normalized)
+        normalized = re.sub(r"\W+", " ", normalized).strip()
+        if normalized:
+            grouped[normalized].append(rule)
+    conflicts: list[StandardsConflict] = []
+    for related in grouped.values():
+        has_negated = any(
+            re.search(r"\b(must|shall)\s+not\b", rule.statement, re.IGNORECASE)
+            for rule in related
+        )
+        has_positive = any(
+            rule.classification == "mandatory"
+            and not re.search(r"\b(must|shall)\s+not\b", rule.statement, re.IGNORECASE)
+            for rule in related
+        )
+        if has_negated and has_positive:
+            conflicts.append(
+                StandardsConflict(
+                    rule_ids=[rule.id for rule in related],
+                    detail="Mandatory standards contain both positive and negative forms.",
+                )
+            )
+    return conflicts
 
 
 class StandardsError(RuntimeError):
@@ -115,14 +201,15 @@ class StandardsService:
             content_hash = hashlib.sha256(content.encode()).hexdigest()
             hashes[path] = content_hash
             rules.extend(
-                self._classify_rules(
-                    binding=binding,
+                classify_markdown_rules(
+                    repository_full_name=binding.repository_full_name,
+                    resolved_commit=binding.resolved_commit,
                     path=path,
                     content=content,
                     content_hash=content_hash,
                 )
             )
-        conflicts = self._find_conflicts(rules)
+        conflicts = find_rule_conflicts(rules)
         gaps = list(traversal_gaps)
         if not markdown_files:
             gaps.append("No readable Markdown standards were found in the approved path scope.")
@@ -384,85 +471,6 @@ class StandardsService:
         return markdown_files, gaps
 
     @staticmethod
-    def _classify_rules(
-        *,
-        binding: RepositoryPurposeBinding,
-        path: str,
-        content: str,
-        content_hash: str,
-    ) -> list[ArchitectureStandardRule]:
-        rules: list[ArchitectureStandardRule] = []
-        heading = PurePosixPath(path).name
-        for line_number, raw_line in enumerate(content.splitlines(), start=1):
-            line = raw_line.strip()
-            if line.startswith("#"):
-                heading = line.lstrip("#").strip() or heading
-                continue
-            statement = re.sub(r"^[-*+]\s+|^\d+[.)]\s+", "", line).strip()
-            if not statement:
-                continue
-            lowered = statement.lower()
-            if any(word in lowered for word in ("superseded", "deprecated", "obsolete")):
-                classification = "superseded"
-            elif re.search(r"\b(must|shall|required)\b", lowered):
-                classification = "mandatory"
-            elif re.search(r"\b(should|recommended)\b", lowered):
-                classification = "preferred"
-            elif re.search(r"\b(may|optional)\b", lowered):
-                classification = "advisory"
-            else:
-                classification = "example"
-            rule_id = hashlib.sha256(
-                f"{binding.resolved_commit}:{path}:{line_number}:{statement}".encode()
-            ).hexdigest()[:24]
-            rules.append(
-                ArchitectureStandardRule(
-                    id=rule_id,
-                    title=heading,
-                    statement=statement,
-                    classification=classification,
-                    citation=StandardCitation(
-                        repository_full_name=binding.repository_full_name,
-                        commit=binding.resolved_commit,
-                        path=path,
-                        line=line_number,
-                        content_hash=content_hash,
-                    ),
-                )
-            )
-        return rules
-
-    @classmethod
-    def _find_conflicts(
-        cls, rules: list[ArchitectureStandardRule]
-    ) -> list[StandardsConflict]:
-        grouped: dict[str, list[ArchitectureStandardRule]] = defaultdict(list)
-        for rule in rules:
-            normalized = _MODAL_PATTERN.sub("", rule.statement.lower())
-            normalized = re.sub(r"\bnot\b", "", normalized)
-            normalized = re.sub(r"\W+", " ", normalized).strip()
-            if normalized:
-                grouped[normalized].append(rule)
-        conflicts: list[StandardsConflict] = []
-        for related in grouped.values():
-            has_negated = any(
-                re.search(r"\b(must|shall)\s+not\b", rule.statement, re.IGNORECASE)
-                for rule in related
-            )
-            has_positive = any(
-                rule.classification == "mandatory"
-                and not re.search(r"\b(must|shall)\s+not\b", rule.statement, re.IGNORECASE)
-                for rule in related
-            )
-            if has_negated and has_positive:
-                conflicts.append(
-                    StandardsConflict(
-                        rule_ids=[rule.id for rule in related],
-                        detail="Mandatory standards contain both positive and negative forms.",
-                    )
-                )
-        return conflicts
-
     @staticmethod
     def _rule_keywords(statement: str) -> set[str]:
         return {
@@ -481,11 +489,10 @@ class StandardsService:
         commit: str,
     ) -> Any:
         try:
-            result = await client.call_tool(
+            return await client.call_tool(
                 "get_file_contents",
                 {"owner": owner, "repo": repository, "path": path, "ref": commit},
             )
-            return GitHubMcpClient.tool_json(result)
         except GitHubMcpError as exc:
             raise StandardsError(
                 f"GitHub MCP could not read commit-pinned standards path '{path or '/'}'."
@@ -498,26 +505,11 @@ class StandardsService:
 
     @staticmethod
     def _directory_entries(raw: Any) -> list[dict[str, Any]] | None:
-        if isinstance(raw, list) and all(isinstance(item, dict) for item in raw):
-            return raw
-        if isinstance(raw, dict):
-            for key in ("items", "entries"):
-                value = raw.get(key)
-                if isinstance(value, list) and all(isinstance(item, dict) for item in value):
-                    return value
-        return None
+        return GitHubMcpClient.file_directory_entries(raw)
 
     @staticmethod
     def _file_text(raw: Any) -> str | None:
-        if not isinstance(raw, dict) or not isinstance(raw.get("content"), str):
-            return None
-        content = raw["content"]
-        if raw.get("encoding") == "base64":
-            try:
-                return base64.b64decode(content, validate=True).decode("utf-8")
-            except (ValueError, UnicodeDecodeError):
-                return None
-        return content
+        return GitHubMcpClient.file_text(raw)
 
     @staticmethod
     def _is_excluded(path: str, exclusions: list[str]) -> bool:

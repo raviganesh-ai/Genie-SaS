@@ -93,6 +93,7 @@ def _executor(
     *,
     architecture_reference_repository=None,
     standards_repository=None,
+    platform_reference_repository_store=None,
 ) -> WorkflowStepExecutor:
     return WorkflowStepExecutor(
         agent_registry=None,  # unused by _resolve_variables
@@ -101,6 +102,7 @@ def _executor(
         governance_service=None,
         architecture_reference_repository=architecture_reference_repository,
         standards_repository=standards_repository,
+        platform_reference_repository_store=platform_reference_repository_store,
     )
 
 
@@ -238,3 +240,87 @@ async def test_reference_sources_are_scoped_to_the_requesting_session() -> None:
     )
 
     assert "none provided" in resolved["architecture_reference_text"]
+
+
+async def test_falls_back_to_platform_configured_architecture_reference_when_session_has_none() -> None:
+    from app.platform_config.models import PlatformReferenceRepository
+    from app.platform_config.repository import InMemoryPlatformReferenceRepositoryStore
+
+    platform_store = InMemoryPlatformReferenceRepositoryStore()
+    await platform_store.put(
+        PlatformReferenceRepository(
+            id="platform-arch-1",
+            repository_id=1,
+            repository_full_name="acme/platform-architecture",
+            repository_url="https://github.com/acme/platform-architecture",
+            purpose="architecture",
+            requested_ref="main",
+            resolved_commit="a" * 40,
+            principal="managed-identity",
+            configured_by_user_id="admin-1",
+            combined_reference_text="Administrator-configured platform reference.",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    executor = _executor(
+        architecture_reference_repository=InMemoryArchitectureReferenceRepository(),
+        platform_reference_repository_store=platform_store,
+    )
+
+    resolved = await executor._resolve_variables(
+        step=_step(),
+        transcript_text="",
+        step_outputs={},
+        step_input=None,
+        agent=_agent(),
+        session_id="session-1",
+        trace_id="trace-1",
+    )
+
+    assert resolved["architecture_reference_text"] == "Administrator-configured platform reference."
+
+
+async def test_session_level_architecture_reference_overrides_the_platform_default() -> None:
+    from app.platform_config.models import PlatformReferenceRepository
+    from app.platform_config.repository import InMemoryPlatformReferenceRepositoryStore
+
+    architecture_repository = InMemoryArchitectureReferenceRepository()
+    await architecture_repository.put(
+        _architecture_snapshot(
+            snapshot_id="arch-session-override",
+            text="This mission's own override.",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    platform_store = InMemoryPlatformReferenceRepositoryStore()
+    await platform_store.put(
+        PlatformReferenceRepository(
+            id="platform-arch-1",
+            repository_id=1,
+            repository_full_name="acme/platform-architecture",
+            repository_url="https://github.com/acme/platform-architecture",
+            purpose="architecture",
+            requested_ref="main",
+            resolved_commit="a" * 40,
+            principal="managed-identity",
+            configured_by_user_id="admin-1",
+            combined_reference_text="Administrator-configured platform reference.",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    executor = _executor(
+        architecture_reference_repository=architecture_repository,
+        platform_reference_repository_store=platform_store,
+    )
+
+    resolved = await executor._resolve_variables(
+        step=_step(),
+        transcript_text="",
+        step_outputs={},
+        step_input=None,
+        agent=_agent(),
+        session_id="session-1",
+        trace_id="trace-1",
+    )
+
+    assert resolved["architecture_reference_text"] == "This mission's own override."

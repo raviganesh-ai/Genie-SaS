@@ -44,6 +44,7 @@ from app.orchestration.workflow_event_bus import WorkflowEventBus
 from app.orchestration.workflow_execution_service import WorkflowExecutionService
 from app.orchestration.workflow_runtime import WorkflowRuntime
 from app.orchestration.workflow_step_executor import WorkflowStepExecutor
+from app.platform_config.repository import PlatformReferenceRepositoryStore
 from app.prompts.registry import PromptRegistry
 from app.repositories.approval_repository import ApprovalRepository
 from app.repositories.governance_event_repository import GovernanceEventRepository
@@ -365,6 +366,7 @@ def create_agent_orchestrator(
     recommendation_lineage_repository: RecommendationLineageRepository | None = None,
     standards_repository: StandardsRepository | None = None,
     architecture_reference_repository: ArchitectureReferenceRepository | None = None,
+    platform_reference_repository_store: PlatformReferenceRepositoryStore | None = None,
 ) -> AgentOrchestrator:
     """Build an ``AgentOrchestrator`` wired to the externally configured registries.
 
@@ -447,6 +449,7 @@ def create_agent_orchestrator(
         model_catalog_service=model_catalog_service,
         standards_repository=standards_repository,
         architecture_reference_repository=architecture_reference_repository,
+        platform_reference_repository_store=platform_reference_repository_store,
     )
     handoff_service = HandoffService(governance_service=resolved_governance_service)
     decision_graph_service = DecisionGraphService()

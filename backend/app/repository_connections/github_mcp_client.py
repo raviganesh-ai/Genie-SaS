@@ -1,6 +1,7 @@
 """Async client for the configured GitHub MCP Streamable HTTP endpoint."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 from typing import Any, Protocol
@@ -107,6 +108,85 @@ class GitHubMcpClient:
         if structured is not None:
             return structured
         raise GitHubMcpError("GitHub MCP returned no structured tool content.")
+
+    @staticmethod
+    def file_directory_entries(result: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Returns a ``get_file_contents`` directory listing, or ``None`` if
+        this response is not a directory listing (e.g. it is a single
+        file's content - callers should then try ``file_text``).
+
+        Unlike ``tool_json``, never raises on non-JSON ``content[].text`` -
+        a single file's response legitimately has a human-readable, non-JSON
+        first text block (see ``file_text``'s docstring), so failing to
+        parse it as JSON here must fall through, not raise.
+        """
+        structured = result.get("structuredContent")
+        if isinstance(structured, list) and all(isinstance(item, dict) for item in structured):
+            return structured
+        if isinstance(structured, dict):
+            for key in ("items", "entries"):
+                value = structured.get(key)
+                if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+                    return value
+        for item in result.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text")
+                if isinstance(text, str):
+                    try:
+                        parsed = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(parsed, list) and all(isinstance(entry, dict) for entry in parsed):
+                        return parsed
+        return None
+
+    @staticmethod
+    def file_text(result: dict[str, Any]) -> str | None:
+        """Returns one file's decoded text content for a ``get_file_contents``
+        call on a file path, or ``None`` if this response is not a single
+        file's text content (e.g. it is a directory listing, or the file
+        could not be decoded as text).
+
+        The real GitHub MCP server's documented response shape for a file is
+        NOT a single JSON-encoded object in ``content[0].text`` - it is a
+        human-readable informational message ("successfully downloaded text
+        file") in ``content[0]``, with the actual file content in a
+        *separate* ``content[]`` item of type ``"resource"`` (and/or
+        mirrored into ``structuredContent`` - both are checked here since
+        real-world responses have been observed to vary; see
+        https://github.com/github/github-mcp-server/issues/595 and
+        https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1624).
+        Confirmed via a live call against the real endpoint during
+        development (not only documentation) - see
+        docs/validation/work-iq-development-validation.md's sibling
+        investigation for this repository-assessment defect.
+        """
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict):
+            content = structured.get("content")
+            if isinstance(content, str):
+                if structured.get("encoding") == "base64":
+                    try:
+                        return base64.b64decode(content, validate=True).decode("utf-8")
+                    except (ValueError, UnicodeDecodeError):
+                        return None
+                return content
+        for item in result.get("content", []):
+            if not isinstance(item, dict) or item.get("type") != "resource":
+                continue
+            resource = item.get("resource")
+            if not isinstance(resource, dict):
+                continue
+            text = resource.get("text")
+            if isinstance(text, str):
+                return text
+            blob = resource.get("blob")
+            if isinstance(blob, str):
+                try:
+                    return base64.b64decode(blob, validate=True).decode("utf-8")
+                except (ValueError, UnicodeDecodeError):
+                    return None
+        return None
 
     @staticmethod
     def tool_content(result: dict[str, Any]) -> Any:

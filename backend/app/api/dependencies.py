@@ -38,6 +38,7 @@ from app.services.peer_review_service import PeerReviewService
 from app.services.requirements_service import RequirementsService
 from app.services.session_service import SessionService
 from app.services.workshop_service import WorkshopService
+from app.platform_config.service import PlatformConfigService
 from app.standards.service import StandardsService
 from app.transcription.speech_service import SpeechToTextService
 
@@ -69,6 +70,7 @@ __all__ = [
     "get_session_service",
     "get_speech_to_text_service",
     "get_standards_service",
+    "get_platform_config_service",
     "get_traceability_service",
     "get_workflow_event_bus",
     "get_work_iq_validation_service",
@@ -202,6 +204,10 @@ def get_repository_assessment_service(request: Request) -> RepositoryAssessmentS
 
 def get_standards_service(request: Request) -> StandardsService:
     return request.app.state.standards_service
+
+
+def get_platform_config_service(request: Request) -> PlatformConfigService:
+    return request.app.state.platform_config_service
 
 
 def get_deployment_pipeline_service(request: Request) -> DeploymentPipelineService:

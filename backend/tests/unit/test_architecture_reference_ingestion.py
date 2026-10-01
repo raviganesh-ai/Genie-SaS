@@ -25,6 +25,20 @@ def _mcp_result(value: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(value)}]}
 
 
+def _mcp_file_result(text: str) -> dict[str, Any]:
+    """Mirrors the REAL GitHub MCP server's documented file-content shape -
+    a human-readable info message in content[0], with the actual file text
+    in a *separate* content[] "resource" block - never a single JSON object
+    in content[0].text (confirmed live; see GitHubMcpClient.file_text's
+    docstring for the real bug this shape previously caused)."""
+    return {
+        "content": [
+            {"type": "text", "text": "successfully downloaded text file (SHA: deadbeef)"},
+            {"type": "resource", "resource": {"uri": "repo://test/test/contents/x", "text": text}},
+        ]
+    }
+
+
 class _FakeGitHubMcpClient:
     endpoint = "https://github.example.test/mcp"
 
@@ -34,9 +48,7 @@ class _FakeGitHubMcpClient:
         if path == "":
             return _mcp_result([{"path": "ARCHITECTURE.md", "type": "file"}])
         if path == "ARCHITECTURE.md":
-            return _mcp_result(
-                {"content": "# Architecture\n\nUse a modular monolith with one database.", "encoding": "utf-8"}
-            )
+            return _mcp_file_result("# Architecture\n\nUse a modular monolith with one database.")
         raise AssertionError(f"Unexpected path: {path}")
 
 

@@ -39,6 +39,7 @@ from app.api import (
     outputs,
     phase_tracking,
     peer_review,
+    platform_config,
     production_promotion,
     prototype_admin,
     replay,
@@ -143,6 +144,11 @@ from app.services.peer_review_service import create_peer_review_service
 from app.services.requirements_service import create_requirements_service
 from app.services.session_service import create_session_service
 from app.services.workshop_service import create_workshop_service
+from app.platform_config.repository import (
+    CosmosPlatformReferenceRepositoryStore,
+    InMemoryPlatformReferenceRepositoryStore,
+)
+from app.platform_config.service import PlatformConfigService
 from app.standards.architecture_reference_repository import (
     CosmosArchitectureReferenceRepository,
     InMemoryArchitectureReferenceRepository,
@@ -232,6 +238,7 @@ def create_app(
         repository_assessment_repository = None
         standards_repository = None
         architecture_reference_repository = None
+        platform_reference_repository_store = None
         iq_evidence_repository = None
         modernization_plan_repository = None
         production_promotion_repository = None
@@ -259,6 +266,9 @@ def create_app(
             architecture_reference_repository = CosmosArchitectureReferenceRepository(
                 store=document_store
             )
+            platform_reference_repository_store = CosmosPlatformReferenceRepositoryStore(
+                store=document_store
+            )
             iq_evidence_repository = CosmosIqEvidenceRepository(store=document_store)
             modernization_plan_repository = CosmosModernizationPlanRepository(store=document_store)
             production_promotion_repository = CosmosProductionPromotionRepository(
@@ -275,6 +285,9 @@ def create_app(
         effective_architecture_reference_repository = (
             architecture_reference_repository or InMemoryArchitectureReferenceRepository()
         )
+        effective_platform_reference_repository_store = (
+            platform_reference_repository_store or InMemoryPlatformReferenceRepositoryStore()
+        )
         orchestrator = create_agent_orchestrator(
             settings=resolved_settings,
             workflow_run_repository=workflow_run_repository,
@@ -284,6 +297,7 @@ def create_app(
             recommendation_lineage_repository=recommendation_lineage_repository,
             standards_repository=effective_standards_repository,
             architecture_reference_repository=effective_architecture_reference_repository,
+            platform_reference_repository_store=effective_platform_reference_repository_store,
         )
         app.state.agent_orchestrator = orchestrator
         app.state.model_catalog_service = create_model_catalog_service(
@@ -394,6 +408,13 @@ def create_app(
             standards_repository=effective_standards_repository,
             architecture_reference_repository=effective_architecture_reference_repository,
             session_service=session_service,
+            governance_service=orchestrator.governance_service,
+            max_files=resolved_settings.repository_assessment_max_files,
+            max_depth=resolved_settings.repository_assessment_max_depth,
+        )
+        app.state.platform_config_service = PlatformConfigService(
+            client=github_mcp_client,
+            repository_store=effective_platform_reference_repository_store,
             governance_service=orchestrator.governance_service,
             max_files=resolved_settings.repository_assessment_max_files,
             max_depth=resolved_settings.repository_assessment_max_depth,
@@ -559,6 +580,7 @@ def create_app(
             capability_catalog=load_modernization_capabilities(
                 resolved_settings.workflows_path
             ),
+            platform_reference_repository_store=effective_platform_reference_repository_store,
         )
         app.state.phase_tracking_service = PhaseTrackingService(
             catalog=load_phase_catalog(resolved_settings.workflows_path),
@@ -746,6 +768,7 @@ def create_app(
     app.include_router(repository_assessments.router)
     app.include_router(standards.router)
     app.include_router(standards.architecture_reference_router)
+    app.include_router(platform_config.router)
 
     return app
 

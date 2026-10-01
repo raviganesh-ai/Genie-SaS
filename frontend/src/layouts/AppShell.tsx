@@ -263,7 +263,16 @@ export function AppShell(): JSX.Element {
           );
         })}
         <div style={{ marginTop: "auto", paddingTop: 16, borderTop: "1px solid #232a33" }}>
-          <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #232a33" }}>
+          <NavLink
+            to="/configure"
+            style={({ isActive }) => navLinkStyle(isActive, false)}
+          >
+            <span aria-hidden="true">⚙️</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              Configure
+            </span>
+          </NavLink>
+          <div style={{ marginTop: 12, marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #232a33" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <Text size={200} weight="semibold">
                 🎮 Triage Mode

@@ -21,6 +21,11 @@ export interface ArchitectureStandardRule {
   citation: StandardCitation;
 }
 
+export interface StandardsConflict {
+  rule_ids: string[];
+  detail: string;
+}
+
 export interface StandardsSnapshot {
   id: string;
   session_id: string;
@@ -30,7 +35,7 @@ export interface StandardsSnapshot {
   paths: string[];
   content_hashes: Record<string, string>;
   rules: ArchitectureStandardRule[];
-  conflicts: Array<{ rule_ids: string[]; detail: string }>;
+  conflicts: StandardsConflict[];
   gaps: string[];
   created_at: string;
 }

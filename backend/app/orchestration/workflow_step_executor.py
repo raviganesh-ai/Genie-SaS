@@ -21,6 +21,7 @@ from app.memory.memory_service import MemoryService
 from app.models.workflow_models import WorkflowStepInput, WorkflowStepResult
 from app.models.workflow_stream_models import WorkflowStreamEvent
 from app.orchestration.workflow_event_bus import WorkflowEventBus
+from app.platform_config.repository import PlatformReferenceRepositoryStore
 from app.prompts.registry import PromptRegistry
 from app.services.model_catalog_service import ModelCatalogService
 from app.standards.architecture_reference_repository import ArchitectureReferenceRepository
@@ -142,6 +143,7 @@ class WorkflowStepExecutor:
         model_catalog_service: ModelCatalogService | None = None,
         architecture_reference_repository: ArchitectureReferenceRepository | None = None,
         standards_repository: StandardsRepository | None = None,
+        platform_reference_repository_store: PlatformReferenceRepositoryStore | None = None,
     ) -> None:
         self._agent_registry = agent_registry
         self._prompt_registry = prompt_registry
@@ -152,6 +154,7 @@ class WorkflowStepExecutor:
         self._model_catalog_service = model_catalog_service
         self._architecture_reference_repository = architecture_reference_repository
         self._standards_repository = standards_repository
+        self._platform_reference_repository_store = platform_reference_repository_store
 
     async def execute_step(
         self,
@@ -490,39 +493,62 @@ class WorkflowStepExecutor:
         return resolved
 
     async def _latest_architecture_reference_text(self, *, session_id: str) -> str:
-        """Optional, user-supplied architecture reference for this session
-        (an "architecture"-purpose repository binding - see
-        ``StandardsService.ingest_architecture_reference``). Applies
-        wherever design-architecture happens across all of Genie-SaS, not
-        only governed modernization: a user may supply an opinionated
-        reference repo to shape a brand-new build's design too. Falls back
-        to the "none provided" text when no repository is configured or
-        none has been ingested yet for this session - this is always
+        """A user-supplied architecture reference, if any exists. Prefers
+        this *session's own* "architecture"-purpose binding (see
+        ``StandardsService.ingest_architecture_reference``) - a one-off
+        override for this specific mission. Falls back to any
+        administrator-configured platform-level reference repositories
+        (see ``app.platform_config`` - configured once, reused by every
+        session automatically) when the session has none of its own.
+        Applies wherever design-architecture happens across all of
+        Genie-SaS, not only governed modernization. Falls back to the
+        "none provided" text only when neither exists - this is always
         optional, never a precondition."""
 
-        if self._architecture_reference_repository is None:
-            return _NO_ARCHITECTURE_REFERENCE_TEXT
-        snapshots = await self._architecture_reference_repository.list_for_session(
-            session_id=session_id
-        )
-        if not snapshots:
-            return _NO_ARCHITECTURE_REFERENCE_TEXT
-        latest = max(snapshots, key=lambda snapshot: snapshot.created_at)
-        return latest.combined_reference_text.strip() or _NO_ARCHITECTURE_REFERENCE_TEXT
+        if self._architecture_reference_repository is not None:
+            snapshots = await self._architecture_reference_repository.list_for_session(
+                session_id=session_id
+            )
+            if snapshots:
+                latest = max(snapshots, key=lambda snapshot: snapshot.created_at)
+                if latest.combined_reference_text.strip():
+                    return latest.combined_reference_text
+        if self._platform_reference_repository_store is not None:
+            platform_repositories = await self._platform_reference_repository_store.list_all()
+            texts = [
+                repository.combined_reference_text
+                for repository in platform_repositories
+                if repository.purpose == "architecture"
+                and repository.combined_reference_text
+                and repository.combined_reference_text.strip()
+            ]
+            if texts:
+                return "\n\n---\n\n".join(texts)
+        return _NO_ARCHITECTURE_REFERENCE_TEXT
 
     async def _latest_standards_reference_text(self, *, session_id: str) -> str:
-        """Optional, user-supplied standards reference for this session (a
-        "standards"-purpose repository binding - see
-        ``StandardsService.ingest``). Same optionality contract as
-        ``_latest_architecture_reference_text``."""
+        """Same session-then-platform fallback contract as
+        ``_latest_architecture_reference_text``, for a user-supplied
+        standards reference (a "standards"-purpose binding - see
+        ``StandardsService.ingest``)."""
 
-        if self._standards_repository is None:
-            return _NO_STANDARDS_REFERENCE_TEXT
-        snapshots = await self._standards_repository.list_for_session(session_id=session_id)
-        if not snapshots:
-            return _NO_STANDARDS_REFERENCE_TEXT
-        latest = max(snapshots, key=lambda snapshot: snapshot.created_at)
-        return _format_standards_reference(latest.rules)
+        if self._standards_repository is not None:
+            snapshots = await self._standards_repository.list_for_session(session_id=session_id)
+            if snapshots:
+                latest = max(snapshots, key=lambda snapshot: snapshot.created_at)
+                if latest.rules:
+                    return _format_standards_reference(latest.rules)
+        if self._platform_reference_repository_store is not None:
+            platform_repositories = await self._platform_reference_repository_store.list_all()
+            platform_rules = [
+                rule
+                for repository in platform_repositories
+                if repository.purpose == "standards"
+                for rule in repository.rules
+            ]
+            if platform_rules:
+                return _format_standards_reference(platform_rules)
+        return _NO_STANDARDS_REFERENCE_TEXT
 
     async def _read_step_output(
         self,

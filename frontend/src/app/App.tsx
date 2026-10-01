@@ -16,6 +16,7 @@ import { StandardsSourcePage } from "@/features/standards/StandardsSourcePage";
 import { IqCollaborationPage } from "@/features/iq/IqCollaborationPage";
 import { ModernizationPage } from "@/features/modernization/ModernizationPage";
 import { PhaseTrackingPage } from "@/features/phase-tracking/PhaseTrackingPage";
+import { PlatformConfigPage } from "@/features/platform-config/PlatformConfigPage";
 import { ProductionPromotionPage } from "@/features/production-promotion/ProductionPromotionPage";
 
 const router = createBrowserRouter([
@@ -33,6 +34,7 @@ const router = createBrowserRouter([
       { path: "modernization", element: <ModernizationPage /> },
       { path: "phases", element: <PhaseTrackingPage /> },
       { path: "production-promotion", element: <ProductionPromotionPage /> },
+      { path: "configure", element: <PlatformConfigPage /> },
       {
         path: "requirements",
         element: <RequirementsHubPage />,

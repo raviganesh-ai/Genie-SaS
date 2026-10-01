@@ -1,7 +1,6 @@
 """Deterministic commit-pinned repository inventory and graph construction."""
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import re
@@ -404,7 +403,7 @@ class RepositoryAssessmentService:
         commit: str,
     ) -> Any:
         try:
-            result = await client.call_tool(
+            return await client.call_tool(
                 "get_file_contents",
                 {
                     "owner": owner,
@@ -413,7 +412,6 @@ class RepositoryAssessmentService:
                     "ref": commit,
                 },
             )
-            return GitHubMcpClient.tool_json(result)
         except GitHubMcpError as exc:
             raise RepositoryAssessmentError(
                 f"GitHub MCP could not read commit-pinned path '{path or '/'}'."
@@ -426,28 +424,11 @@ class RepositoryAssessmentService:
 
     @staticmethod
     def _directory_entries(raw: Any) -> list[dict[str, Any]] | None:
-        if isinstance(raw, list) and all(isinstance(item, dict) for item in raw):
-            return raw
-        if isinstance(raw, dict):
-            for key in ("items", "entries"):
-                value = raw.get(key)
-                if isinstance(value, list) and all(isinstance(item, dict) for item in value):
-                    return value
-        return None
+        return GitHubMcpClient.file_directory_entries(raw)
 
     @staticmethod
     def _file_text(raw: Any) -> str | None:
-        if not isinstance(raw, dict):
-            return None
-        content = raw.get("content")
-        if not isinstance(content, str):
-            return None
-        if raw.get("encoding") == "base64":
-            try:
-                return base64.b64decode(content, validate=True).decode("utf-8")
-            except (ValueError, UnicodeDecodeError):
-                return None
-        return content
+        return GitHubMcpClient.file_text(raw)
 
     @staticmethod
     def _entry_size(entry: dict[str, Any]) -> int | None:

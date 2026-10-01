@@ -15,6 +15,7 @@ from app.modernization.capabilities import ModernizationCapability, Modernizatio
 from app.modernization.models import ModernizationFileChange, ModernizationPlan
 from app.modernization.repository import ModernizationPlanRepository
 from app.orchestration.agent_orchestrator import AgentOrchestrator
+from app.platform_config.repository import PlatformReferenceRepositoryStore
 from app.repository_assessment.repository import RepositoryAssessmentRepository
 from app.repository_connections.github_mcp_client import GitHubMcpClient, GitHubMcpError
 from app.repository_connections.repository import RepositoryBindingRepository
@@ -64,6 +65,7 @@ class ModernizationService:
         approval_service: ApprovalService,
         governance_service: GovernanceService,
         capability_catalog: ModernizationCapabilityCatalog,
+        platform_reference_repository_store: PlatformReferenceRepositoryStore | None = None,
     ) -> None:
         self._client = client
         self._plan_repository = plan_repository
@@ -76,6 +78,7 @@ class ModernizationService:
         self._approval_service = approval_service
         self._governance_service = governance_service
         self._capability_catalog = capability_catalog
+        self._platform_reference_repository_store = platform_reference_repository_store
 
     async def generate_plan(
         self,
@@ -111,20 +114,35 @@ class ModernizationService:
         # Optional, exactly like the architecture reference below: a user
         # may supply their own opinionated standards (a "standards"-purpose
         # binding) so the generated plan is constrained by them; if absent,
-        # Genie applies its own best-practice judgment instead of failing
-        # closed - standards are a quality aid here, not a precondition.
+        # fall back to any administrator-configured platform-level standards
+        # repositories (see app.platform_config); if there are none of those
+        # either, Genie applies its own best-practice judgment instead of
+        # failing closed - standards are a quality aid here, not a
+        # precondition.
         standards_json = "{}"
         if standards_snapshot_id:
             standards = await self._standards_repository.get(snapshot_id=standards_snapshot_id)
             if standards is None or standards.session_id != session_id:
                 raise ModernizationError("Standards snapshot was not found for this session.")
             standards_json = standards.model_dump_json()
+        elif self._platform_reference_repository_store is not None:
+            platform_repositories = await self._platform_reference_repository_store.list_all()
+            platform_rules = [
+                rule.model_dump(mode="json")
+                for repository in platform_repositories
+                if repository.purpose == "standards"
+                for rule in repository.rules
+            ]
+            if platform_rules:
+                standards_json = json.dumps({"rules": platform_rules})
 
         # Optional: a user may supply their own opinionated architecture
         # reference (an "architecture"-purpose binding) so the generated
-        # plan aligns with their vision; if absent, Genie decides the
-        # architecture itself (Microsoft Azure Architecture Center guidance
-        # + available IQ context) - see _NO_ARCHITECTURE_REFERENCE_TEXT.
+        # plan aligns with their vision; if absent, fall back to any
+        # administrator-configured platform-level architecture repositories;
+        # if there are none of those either, Genie decides the architecture
+        # itself (Microsoft Azure Architecture Center guidance + available
+        # IQ context) - see _NO_ARCHITECTURE_REFERENCE_TEXT.
         architecture_reference_text = _NO_ARCHITECTURE_REFERENCE_TEXT
         if architecture_reference_snapshot_id:
             architecture_reference = await self._architecture_reference_repository.get(
@@ -136,6 +154,17 @@ class ModernizationService:
                 )
             if architecture_reference.combined_reference_text.strip():
                 architecture_reference_text = architecture_reference.combined_reference_text
+        elif self._platform_reference_repository_store is not None:
+            platform_repositories = await self._platform_reference_repository_store.list_all()
+            platform_texts = [
+                repository.combined_reference_text
+                for repository in platform_repositories
+                if repository.purpose == "architecture"
+                and repository.combined_reference_text
+                and repository.combined_reference_text.strip()
+            ]
+            if platform_texts:
+                architecture_reference_text = "\n\n---\n\n".join(platform_texts)
 
         capability = self._capability_catalog.get(capability_id)
         instruction = capability.instruction(target)
