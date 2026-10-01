@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, Dropdown, Option, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } from "@fluentui/react-components";
+import { Button, Dropdown, Option, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text } from "@fluentui/react-components";
 import { Delete24Regular } from "@fluentui/react-icons";
 import { PageHeader } from "@/layouts/AppShell";
 import { LoadingState } from "@/components/LoadingState";
@@ -201,6 +201,18 @@ export function UploadPage(): JSX.Element {
           {clicked ? "Opening Requirements..." : "Start Prototyping"}
         </Button>
       </div>
+
+      <Text size={100} style={{ opacity: 0.6, display: "block", marginTop: 14 }}>
+        Rather pull context from meetings and communications than upload files?{" "}
+        <Button
+          appearance="transparent"
+          size="small"
+          style={{ padding: 0, minWidth: 0 }}
+          onClick={() => navigate("/iq-collaboration")}
+        >
+          Ask Work IQ
+        </Button>
+      </Text>
     </div>
   );
 }

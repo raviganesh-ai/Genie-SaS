@@ -277,7 +277,7 @@ function WorkIqDevelopmentDiagnosticsSection({ sessionId }: { sessionId: string 
 
 export function IqCollaborationPage(): JSX.Element {
   const navigate = useNavigate();
-  const { sessionId } = useSessionContext();
+  const { sessionId, missionKind } = useSessionContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const [providers, setProviders] = useState<IqProviderStatus[]>([]);
   const [connections, setConnections] = useState<IqConnectionStatus[]>([]);
@@ -522,8 +522,15 @@ export function IqCollaborationPage(): JSX.Element {
           </div>
         </Card>
       ))}
-      <Button appearance="secondary" onClick={() => navigate("/modernization")}>
-        Continue to Governed Modernization
+      <Button
+        appearance="secondary"
+        onClick={() =>
+          navigate(missionKind === "discover_requirements" ? "/requirements" : "/modernization")
+        }
+      >
+        {missionKind === "discover_requirements"
+          ? "Continue to Requirements"
+          : "Continue to Governed Modernization"}
       </Button>
       {error ? <ErrorState error={error} onRetry={() => void load()} /> : null}
     </section>
