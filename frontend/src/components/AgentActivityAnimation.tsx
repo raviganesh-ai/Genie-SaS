@@ -26,6 +26,7 @@ export function AgentActivityAnimation({
   label,
   events = [],
   startedAt,
+  fallbackDetail = "Coordinating specialist agents in real time...",
 }: {
   label: string;
   events?: WorkflowStreamEvent[];
@@ -33,6 +34,11 @@ export function AgentActivityAnimation({
    *  elapsed counter is shown so a genuinely long-running phase never looks
    *  indistinguishable from a frozen page. */
   startedAt?: string | null;
+  /** Secondary line shown while no workflow event has arrived yet. Defaults
+   *  to the original agent-coordination copy; override for activities that
+   *  aren't agent/workflow-event driven (e.g. a plain live data read) so the
+   *  message stays accurate to what is actually happening. */
+  fallbackDetail?: string;
 }): JSX.Element {
   const lastEvent = events[events.length - 1];
 
@@ -81,7 +87,7 @@ export function AgentActivityAnimation({
             <span className="genie-bounce-dot" />
           </span>
           <Text size={200} style={{ opacity: 0.7 }}>
-            {lastEvent ? describeEvent(lastEvent) : "Coordinating specialist agents in real time..."}
+            {lastEvent ? describeEvent(lastEvent) : fallbackDetail}
           </Text>
         </div>
       </div>

@@ -14,8 +14,8 @@ import {
   Text,
   Title2,
 } from "@fluentui/react-components";
+import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { ErrorState } from "@/components/ErrorState";
-import { useElapsedSeconds } from "@/hooks/useElapsedSeconds";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
 import { platformConfigApi } from "@/services/platformConfigApi";
@@ -62,8 +62,8 @@ export function ModernizationPage(): JSX.Element {
   const [target, setTarget] = useState("");
   const [working, setWorking] = useState(false);
   const [assessing, setAssessing] = useState(false);
+  const [assessingStartedAt, setAssessingStartedAt] = useState<string | null>(null);
   const [error, setError] = useState<SafeError | null>(null);
-  const assessingElapsedSeconds = useElapsedSeconds(assessing);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -104,6 +104,7 @@ export function ModernizationPage(): JSX.Element {
       if (allAssessments.length === 0 && firstBindingId) {
         setAssessments([]);
         setAssessing(true);
+        setAssessingStartedAt(new Date().toISOString());
         try {
           const created = await repositoryConnectionApi.createAssessment(sessionId, firstBindingId);
           setAssessments([created]);
@@ -114,6 +115,7 @@ export function ModernizationPage(): JSX.Element {
           );
         } finally {
           setAssessing(false);
+          setAssessingStartedAt(null);
         }
         return;
       }
@@ -217,11 +219,7 @@ export function ModernizationPage(): JSX.Element {
         </Field>
         <Field
           label="Dependency assessment"
-          hint={
-            assessing
-              ? `Reading the bound repository live... (${assessingElapsedSeconds}s - larger repositories can take several minutes)`
-              : undefined
-          }
+          hint={assessing ? "Reading the bound repository live..." : undefined}
         >
           <Dropdown
             value={
@@ -238,6 +236,13 @@ export function ModernizationPage(): JSX.Element {
             ))}
           </Dropdown>
         </Field>
+        {assessing ? (
+          <AgentActivityAnimation
+            label="Reading each file live from GitHub..."
+            startedAt={assessingStartedAt}
+            fallbackDetail="Larger repositories can take several minutes - this is still working."
+          />
+        ) : null}
         <Field
           label="Standards and architecture reference"
           hint="Configured once for the whole platform in ⚙️ Configure - applied automatically to every plan unless that page has none set."

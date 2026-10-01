@@ -21,11 +21,11 @@ import ReactFlow, {
   type Node,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { ErrorState } from "@/components/ErrorState";
 import { ApiError } from "@/services/httpClient";
 import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
 import { useSessionContext } from "@/state/SessionContext";
-import { useElapsedSeconds } from "@/hooks/useElapsedSeconds";
 import type { SafeError } from "@/types/common";
 import type {
   DependencyNodeType,
@@ -57,13 +57,14 @@ export function DependencyMappingPage(): JSX.Element {
   const [selectedBindingId, setSelectedBindingId] = useState("");
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
   const [error, setError] = useState<SafeError | null>(null);
-  const elapsedSeconds = useElapsedSeconds(running);
 
   const runAssessmentFor = useCallback(
     async (bindingId: string) => {
       if (!sessionId || !bindingId) return;
       setRunning(true);
+      setRunStartedAt(new Date().toISOString());
       setError(null);
       try {
         setAssessment(await repositoryConnectionApi.createAssessment(sessionId, bindingId));
@@ -73,6 +74,7 @@ export function DependencyMappingPage(): JSX.Element {
         );
       } finally {
         setRunning(false);
+        setRunStartedAt(null);
       }
     },
     [sessionId],
@@ -192,15 +194,16 @@ export function DependencyMappingPage(): JSX.Element {
           disabled={!selectedBindingId || running}
           onClick={() => void runAssessment()}
         >
-          {running ? `Reading immutable repository... (${elapsedSeconds}s)` : "Run live dependency assessment"}
+          {running ? "Reading immutable repository..." : "Run live dependency assessment"}
         </Button>
-        {running ? (
-          <Text size={200} style={{ opacity: 0.65 }}>
-            Genie is reading each file live from GitHub, one at a time - larger repositories can
-            take several minutes. This is still working as long as the timer above is counting up.
-          </Text>
-        ) : null}
       </Card>
+      {running ? (
+        <AgentActivityAnimation
+          label="Reading each file live from GitHub..."
+          startedAt={runStartedAt}
+          fallbackDetail="Larger repositories can take several minutes - this is still working."
+        />
+      ) : null}
 
       {assessment ? (
         <>
