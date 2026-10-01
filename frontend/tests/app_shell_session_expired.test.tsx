@@ -110,10 +110,10 @@ describe("AppShell mission navigation", () => {
     await userEvent.click(repoLink);
     expect(await screen.findByText(/repository page marker/i)).toBeInTheDocument();
 
-    // Architecture needs an active workflow run, which this render has
-    // none of - it must not be a clickable link at all.
-    expect(screen.queryByRole("link", { name: /architecture/i })).not.toBeInTheDocument();
-    expect(screen.getByText("4. Architecture").closest("[aria-disabled]")).not.toBeNull();
+    // Architecture (now "UI & Agent Design") needs an active workflow run,
+    // which this render has none of - it must not be a clickable link at all.
+    expect(screen.queryByRole("link", { name: /ui & agent design/i })).not.toBeInTheDocument();
+    expect(screen.getByText("4. UI & Agent Design").closest("[aria-disabled]")).not.toBeNull();
   });
 
   it("disables every session-gated step when there is no session at all", () => {

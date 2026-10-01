@@ -24,7 +24,7 @@ describe("LandingPage generation model selector", () => {
 
     expect(await screen.findByText("What Genie can do")).toBeInTheDocument();
     expect(screen.getByText("Understand code")).toBeInTheDocument();
-    expect(screen.getByText("Design the solution")).toBeInTheDocument();
+    expect(screen.getByText("Discover a solution")).toBeInTheDocument();
     expect(screen.getByText("Modernize and deliver")).toBeInTheDocument();
   });
 
@@ -72,7 +72,7 @@ describe("LandingPage generation model selector", () => {
       </Routes>,
     );
 
-    expect(await screen.findByText("Discovery revision 3")).toBeInTheDocument();
+    expect(await screen.findByText("Prototype solutions revision 3")).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Resume" }));
 
     expect(await screen.findByText("Resumed session-42 with gpt-5-mini")).toBeInTheDocument();
@@ -106,11 +106,11 @@ describe("LandingPage generation model selector", () => {
 
     renderWithProviders(<LandingPage />);
 
-    expect(await screen.findByText("Discovery revision 3")).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Delete Discovery revision 3" }));
+    expect(await screen.findByText("Prototype solutions revision 3")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Delete prototype solutions revision 3" }));
 
     await waitFor(() => {
-      expect(screen.queryByText("Discovery revision 3")).not.toBeInTheDocument();
+      expect(screen.queryByText("Prototype solutions revision 3")).not.toBeInTheDocument();
       expect(fetchMock.mock.calls.some(([input, init]) =>
         new URL(input.toString()).pathname.endsWith("/sessions/session-42/discovery")
         && init?.method === "DELETE",

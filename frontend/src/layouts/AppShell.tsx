@@ -36,8 +36,8 @@ const NAV_ITEMS: NavItemConfig[] = [
     ],
     requires: "session",
   },
-  { to: "/architecture-studio", label: "Architecture", icon: "🏗️", requires: "run" },
-  { to: "/workshop", label: "UI & Agent Design", icon: "🤖", requires: "run" },
+  { to: "/architecture-studio", label: "UI & Agent Design", icon: "🏗️", requires: "run" },
+  { to: "/workshop", label: "Build", icon: "🤖", requires: "run" },
   { to: "/phases", label: "Governance", icon: "🛡️", requires: "run" },
   {
     to: "/outputs",
@@ -59,7 +59,6 @@ const NAV_ITEMS: NavItemConfig[] = [
 const MISSION_KIND_STEPS: Record<MissionKind, string[]> = {
   discover_requirements: ["/", "/upload", "/requirements", "/architecture-studio", "/workshop", "/phases", "/outputs"],
   understand_code: ["/", "/repository-connections", "/architecture-studio", "/workshop", "/phases", "/outputs"],
-  design_solution: ["/", "/requirements", "/architecture-studio", "/workshop", "/phases", "/outputs"],
   modernize_and_deliver: ["/", "/repository-connections", "/phases", "/outputs"],
 };
 

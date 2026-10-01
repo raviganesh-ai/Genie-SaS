@@ -405,7 +405,7 @@ export function DiscoveryPage(): JSX.Element {
     async (enabled: boolean) => {
       if (!sessionId) return;
       await perform(
-        enabled ? "save Discovery" : "stop saving Discovery",
+        enabled ? "save solution" : "stop saving solution",
         () => discoveryApi.setSavePreference(sessionId, enabled),
       );
     },
@@ -415,7 +415,7 @@ export function DiscoveryPage(): JSX.Element {
   const runDiscovery = useCallback(async () => {
     if (!sessionId || !selectedPersonaIds.length) return;
     await perform(
-      "run Discovery",
+      "generate solutions",
       () => discoveryApi.selectPersonas(sessionId, selectedPersonaIds),
     );
   }, [perform, selectedPersonaIds, sessionId]);
@@ -453,7 +453,7 @@ export function DiscoveryPage(): JSX.Element {
 
   const deleteDiscovery = useCallback(async () => {
     if (!sessionId) return;
-    setBusy("delete Discovery");
+    setBusy("delete solution");
     setError(null);
     try {
       await discoveryApi.delete(sessionId);
@@ -475,7 +475,7 @@ export function DiscoveryPage(): JSX.Element {
   if (!sessionId) {
     return (
       <div>
-        <PageHeader title="Discovery" subtitle="No active session yet." />
+        <PageHeader title="Prototype Solutions" subtitle="No active session yet." />
         <Button appearance="primary" onClick={() => navigate("/")}>Start a session</Button>
       </div>
     );
@@ -513,10 +513,10 @@ export function DiscoveryPage(): JSX.Element {
   return (
     <div className="discovery-page genie-fade-in">
       <PageHeader
-        title="Discovery"
+        title="Prototype Solutions"
         subtitle="Turn customer evidence into a persona-led, costed Azure solution and runnable prototype."
       />
-      <div className="discovery-progress" aria-label={`Discovery progress, step ${progress} of 6`}>
+      <div className="discovery-progress" aria-label={`Prototype solutions progress, step ${progress} of 6`}>
         {[1, 2, 3, 4, 5, 6].map((step) => <span key={step} className={step <= progress ? "active" : ""} />)}
       </div>
       <div className="discovery-toolbar">
@@ -538,7 +538,7 @@ export function DiscoveryPage(): JSX.Element {
           ) : null}
           {discoveryCase ? (
             <Switch
-              label="Save discovery"
+              label="Save solution"
               checked={discoveryCase.save_enabled}
               disabled={Boolean(busy) || discoveryCase.status === "build_started"}
               onChange={(_, data) => void updateSavePreference(Boolean(data.checked))}
@@ -551,7 +551,7 @@ export function DiscoveryPage(): JSX.Element {
               disabled={Boolean(busy) || discoveryCase.status === "build_started"}
               onClick={() => void deleteDiscovery()}
             >
-              {discoveryCase.save_enabled ? "Delete Discovery" : "Discard Discovery"}
+              {discoveryCase.save_enabled ? "Delete solution" : "Discard solution"}
             </Button>
           ) : null}
         </div>
@@ -560,7 +560,7 @@ export function DiscoveryPage(): JSX.Element {
       {error ? <ErrorState error={error} /> : null}
       {discoveryCase?.last_error ? <MessageBar intent="warning">{discoveryCase.last_error}</MessageBar> : null}
       {uploadError ? <ErrorState error={uploadError} /> : null}
-      {busy || loadingCase ? <Spinner label={busy ? `${busy}...` : "Loading Discovery..."} /> : null}
+      {busy || loadingCase ? <Spinner label={busy ? `${busy}...` : "Loading prototype solutions..."} /> : null}
 
       <section className="discovery-section" aria-labelledby="discovery-evidence">
         <div className="discovery-section-header">

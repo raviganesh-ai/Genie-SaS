@@ -17,7 +17,6 @@ import type { SafeError } from "@/types/common";
 export type MissionKind =
   | "discover_requirements"
   | "understand_code"
-  | "design_solution"
   | "modernize_and_deliver";
 
 export interface SessionContextValue {

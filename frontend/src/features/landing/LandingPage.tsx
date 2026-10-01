@@ -46,12 +46,12 @@ const CAPABILITIES: Array<{
     destination: "/repository-connections",
   },
   {
-    kind: "design_solution",
+    kind: "discover_requirements",
     icon: "🏗️",
-    title: "Design the solution",
+    title: "Discover a solution",
     description:
-      "Create architecture, requirement-specific UI designs, and dedicated agent workflows.",
-    destination: "/architecture-studio",
+      "Turn customer evidence into a persona-led, costed Azure solution and a runnable prototype.",
+    destination: "/discovery",
   },
   {
     kind: "modernize_and_deliver",
@@ -266,18 +266,6 @@ export function LandingPage(): JSX.Element {
             </button>
           ))}
         </div>
-        <Text size={100} style={{ opacity: 0.6, display: "block", marginTop: 14 }}>
-          Prefer a conversation instead of uploading files?{" "}
-          <Button
-            appearance="transparent"
-            size="small"
-            disabled={creating}
-            style={{ padding: 0, minWidth: 0 }}
-            onClick={() => void handleCreate("/discovery", "discover_requirements")}
-          >
-            Start discovery as a conversation
-          </Button>
-        </Text>
       </section>
 
       {modelsError ? <ErrorState error={modelsError} /> : null}
@@ -285,7 +273,7 @@ export function LandingPage(): JSX.Element {
 
       {savedDiscoveries.length > 0 ? (
         <section style={{ marginTop: 32, textAlign: "left", borderTop: "1px solid #232a33", paddingTop: 20 }}>
-          <Text weight="semibold" size={400}>Resume Discovery</Text>
+          <Text weight="semibold" size={400}>Resume Prototype Solutions</Text>
           <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
             {savedDiscoveries.map((item) => (
               <div
@@ -301,7 +289,7 @@ export function LandingPage(): JSX.Element {
               >
                 <div>
                   <Text weight="semibold" style={{ display: "block" }}>
-                    Discovery revision {item.analysis_revision}
+                    Prototype solutions revision {item.analysis_revision}
                   </Text>
                   <Text size={200} style={{ opacity: 0.7 }}>
                     Updated {new Date(item.updated_at).toLocaleString()} · {item.source_upload_ids.length} source file(s)
@@ -324,8 +312,8 @@ export function LandingPage(): JSX.Element {
                     appearance="subtle"
                     shape="circular"
                     icon={<Delete24Regular />}
-                    aria-label={`Delete Discovery revision ${item.analysis_revision}`}
-                    title={`Delete Discovery revision ${item.analysis_revision}`}
+                    aria-label={`Delete prototype solutions revision ${item.analysis_revision}`}
+                    title={`Delete prototype solutions revision ${item.analysis_revision}`}
                     disabled={deletingSessionId !== null}
                     onClick={() => void handleDeleteDiscovery(item)}
                   />

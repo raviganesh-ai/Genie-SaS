@@ -217,8 +217,8 @@ export function WorkshopPage(): JSX.Element {
   if (!workflowRunId || !sessionId) {
     return (
       <NoActiveMissionState
-        title="Workshop"
-        message="Start a mission from Home and get through Architecture first to open the workshop."
+        title="Build"
+        message="Start a mission from Home and get through UI & Agent Design first to open Build."
       />
     );
   }
@@ -226,7 +226,7 @@ export function WorkshopPage(): JSX.Element {
   return (
     <div>
       <PageHeader
-        title="UI & Agent Design"
+        title="Build"
         subtitle="Watch Genie call the Orchestrator Agent to generate this mission's React UI code and multi-agent code."
         action={
           // Only offered once this stage has actually produced its own

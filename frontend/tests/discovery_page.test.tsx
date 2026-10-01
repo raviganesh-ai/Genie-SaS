@@ -112,7 +112,7 @@ describe("DiscoveryPage", () => {
     expect(screen.queryByText("Manual evidence checks")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "2. Select the persona of your choice" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Select personas" })).toHaveValue("Jordan Lee");
-    expect(screen.getByRole("switch", { name: "Save discovery" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Save solution" })).toBeChecked();
     expect(screen.getByRole("button", { name: "Export PDF" })).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Export PDF" }));
     expect(print).toHaveBeenCalledOnce();
@@ -417,7 +417,7 @@ describe("DiscoveryPage", () => {
       });
     });
 
-    await user.click(screen.getByRole("switch", { name: "Save discovery" }));
+    await user.click(screen.getByRole("switch", { name: "Save solution" }));
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([input, init]) =>
         new URL(input.toString()).pathname.endsWith("/save-preference")

@@ -262,7 +262,7 @@ export function ArchitectureStudioPage(): JSX.Element {
       await refresh();
     } catch (err) {
       setRerunDesignError(
-        err instanceof ApiError ? err : { message: "Failed to re-run Architecture Studio." },
+        err instanceof ApiError ? err : { message: "Failed to re-run UI & Agent Design." },
       );
     } finally {
       setRerunningDesign(false);
@@ -326,8 +326,8 @@ export function ArchitectureStudioPage(): JSX.Element {
   if (!workflowRunId) {
     return (
       <NoActiveMissionState
-        title="Architecture Studio"
-        message="Start a mission from Home (Discover requirements, Understand code, or Design the solution) to see architecture recommendations here."
+        title="UI & Agent Design"
+        message="Start a mission from Home (Discover requirements, Understand code, or Discover a solution) to see architecture recommendations here."
       />
     );
   }
@@ -335,7 +335,7 @@ export function ArchitectureStudioPage(): JSX.Element {
   return (
     <div>
       <PageHeader
-        title="Architecture Studio"
+        title="UI & Agent Design"
         subtitle="Recommended architecture components and reanalysis actions for this workflow run."
       />
       {loading && !snapshot ? <LoadingState label="Loading architecture..." /> : null}
@@ -361,7 +361,7 @@ export function ArchitectureStudioPage(): JSX.Element {
       {architectureComponent ? (
         <SectionCard title="🔁 Re-run This Stage">
           <Text size={200} style={{ display: "block", marginBottom: 10, opacity: 0.75 }}>
-            Re-execute Architecture Studio for this same workflow run using the current approved requirements.
+            Re-execute UI & Agent Design for this same workflow run using the current approved requirements.
           </Text>
           {rerunDesignError ? <ErrorState error={rerunDesignError} /> : null}
           <Button
@@ -369,7 +369,7 @@ export function ArchitectureStudioPage(): JSX.Element {
             disabled={rerunningDesign}
             onClick={() => void handleRerunArchitectureStage()}
           >
-            {rerunningDesign ? "Re-running Architecture Studio..." : "Re-run Architecture Studio"}
+            {rerunningDesign ? "Re-running UI & Agent Design..." : "Re-run UI & Agent Design"}
           </Button>
         </SectionCard>
       ) : null}
