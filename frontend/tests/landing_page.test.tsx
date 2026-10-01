@@ -12,6 +12,22 @@ function ResumeTarget(): JSX.Element {
 }
 
 describe("LandingPage generation model selector", () => {
+  it("explains the available capabilities and where to find them", async () => {
+    mockFetchSequence([
+      {
+        match: "/models/available",
+        response: { default_model: "gpt-5-mini", available_models: ["gpt-5-mini"] },
+      },
+    ]);
+
+    renderWithProviders(<LandingPage />);
+
+    expect(await screen.findByText("What Genie can do")).toBeInTheDocument();
+    expect(screen.getByText("Understand code")).toBeInTheDocument();
+    expect(screen.getByText("Design the solution")).toBeInTheDocument();
+    expect(screen.getByText("Modernize and deliver")).toBeInTheDocument();
+  });
+
   it("pre-populates the dropdown with the backend's default model once the catalog loads", async () => {
     mockFetchSequence([
       {

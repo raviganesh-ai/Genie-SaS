@@ -120,6 +120,121 @@ a,
   animation: genie-live-pulse 1.6s ease-in-out infinite;
 }
 
+.repository-intake {
+  width: min(920px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 16px;
+}
+
+.repository-intake-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  background-color: rgba(19, 25, 33, 0.65);
+  border: 1px solid #232a33;
+}
+
+.repository-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.repository-bindings {
+  display: grid;
+  gap: 8px;
+}
+
+.repository-binding {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+}
+
+.repository-commit {
+  font-family: Consolas, "Courier New", monospace;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .repository-search-row {
+    grid-template-columns: 1fr;
+  }
+
+  .dependency-mapping-page {
+    width: min(1200px, 100%);
+    margin: 0 auto;
+    display: grid;
+    gap: 16px;
+  }
+
+  .dependency-mapping-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .dependency-mapping-stats > * {
+    display: grid;
+    gap: 4px;
+    padding: 16px;
+  }
+
+  .dependency-mapping-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .dependency-graph {
+    height: 600px;
+    border: 1px solid #2a323d;
+    border-radius: 8px;
+    background: #0f141b;
+  }
+
+  .standards-rule-list {
+    display: grid;
+    gap: 8px;
+    max-height: 520px;
+    overflow: auto;
+  }
+
+  .standards-rule {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #2a323d;
+  }
+
+  .iq-evidence-content {
+    max-height: 320px;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid #2a323d;
+    border-radius: 8px;
+    background: #0b0f14;
+    color: #c8d0da;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 800px) {
+    .dependency-mapping-stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+}
+
 /* "Genie is working with your agents..." waiting banner (AgentActivityAnimation) -
    a typing-indicator-style trio of bouncing dots plus a faint animated
    brand-tinted background so the whole card visibly feels "alive" while an
@@ -439,4 +554,3 @@ a,
   border-color: rgba(47, 131, 224, 0.5) !important;
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
 }
-

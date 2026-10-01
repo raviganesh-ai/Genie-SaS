@@ -28,6 +28,7 @@ from app.config.settings import Settings
 from app.governance.governance_events import new_governance_event
 from app.governance.governance_models import (
     GovernanceProvider,
+    GovernanceProviderError,
     LocalGovernanceTraceProvider,
 )
 from app.models.approval_models import ApprovalAuditRecord
@@ -323,6 +324,11 @@ def create_governance_service(
 
     policy = load_governance_policy(settings.policies_path)
 
+    if settings.governance_provider == "agent365" and provider is None:
+        raise GovernanceProviderError(
+            "Agent 365 governance is configured but no Agent365GovernanceProvider "
+            "implementation was injected."
+        )
     resolved_provider = provider or LocalGovernanceTraceProvider()
 
     resolved_repository = event_repository or InMemoryGovernanceEventRepository()

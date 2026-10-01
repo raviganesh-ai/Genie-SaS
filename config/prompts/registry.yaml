@@ -5,6 +5,36 @@
 # embedding prompt text in source code. Prompt execution is implemented
 # alongside AzureAgentGateway in Phase 3.
 prompts:
+  - id: modernization-plan-v1
+    name: Governed Modernization Plan
+    description: >-
+      Produces an evidence-bound file change plan for a dedicated pull-request branch.
+    template: >-
+      You are the Build Agent deployed in Azure AI Foundry. Produce a complete,
+      reviewable modernization change set for the immutable repository snapshot below.
+      Do not exceed the selected capability or invent unrelated files. Preserve behavior,
+      apply every cited mandatory standard, and do not weaken tests or security.
+
+      Repository: {repository_full_name}
+      Base commit: {base_commit}
+      Selected capability: {capability_name}
+      Bounded modernization instruction: {modernization_instruction}
+      Dependency assessment JSON: {assessment_json}
+      Standards conformance JSON: {standards_json}
+
+      Return only one JSON object with this exact shape:
+      {{"summary":"...","changes":[{{"path":"relative/path","content":"complete file content",
+      "reason":"evidence-backed reason"}}],"validation_commands":["real command"],
+      "residual_risks":["..."],"rollback":"..."}}.
+      Each changed file must contain complete replacement content. Do not return Markdown fences.
+    variables:
+      - repository_full_name
+      - base_commit
+      - capability_name
+      - modernization_instruction
+      - assessment_json
+      - standards_json
+
   - id: requirements-extraction-v1
     name: Requirements Extraction
     description: >-
@@ -1774,5 +1804,3 @@ prompts:
       - retry_instruction
       - source_material
     version: "2.5.0"
-
-

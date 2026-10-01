@@ -34,3 +34,24 @@ checkpoints:
     description: >-
       Human approval of the final customer-facing output before delivery.
     required: true
+
+  - id: modernization-pr-approval
+    name: Modernization Pull Request Approval
+    description: >-
+      Human approval of a commit-pinned modernization plan before Genie
+      creates a branch, pushes generated changes, or opens a pull request.
+    required: true
+
+  - id: nonproduction-release-approval
+    name: Non-Production Release Approval
+    description: >-
+      Human approval of the complete infrastructure, migration, validation,
+      rollback, and cost evidence package before non-production deployment.
+    required: true
+
+  - id: production-promotion-approval
+    name: Production Promotion Approval
+    description: >-
+      Human approval of migration rehearsal, operational readiness, staged
+      rollout, reconciliation, and rollback evidence before production traffic changes.
+    required: true

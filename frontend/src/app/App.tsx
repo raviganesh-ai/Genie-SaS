@@ -10,6 +10,13 @@ import { WorkshopPage } from "@/features/workshop-center/WorkshopPage";
 import { RequirementFidelityGatePage } from "@/features/requirement-fidelity/RequirementFidelityGatePage";
 import { DeployLaunchPage } from "@/features/deploy-launch/DeployLaunchPage";
 import { DiscoveryPage } from "@/features/discovery/DiscoveryPage";
+import { RepositoryConnectionPage } from "@/features/repository-connections/RepositoryConnectionPage";
+import { DependencyMappingPage } from "@/features/dependency-mapping/DependencyMappingPage";
+import { StandardsSourcePage } from "@/features/standards/StandardsSourcePage";
+import { IqCollaborationPage } from "@/features/iq/IqCollaborationPage";
+import { ModernizationPage } from "@/features/modernization/ModernizationPage";
+import { PhaseTrackingPage } from "@/features/phase-tracking/PhaseTrackingPage";
+import { ProductionPromotionPage } from "@/features/production-promotion/ProductionPromotionPage";
 
 const router = createBrowserRouter([
   {
@@ -19,6 +26,13 @@ const router = createBrowserRouter([
       { index: true, element: <LandingPage /> },
       { path: "upload", element: <UploadPage /> },
       { path: "discovery", element: <DiscoveryPage /> },
+      { path: "repository-connections", element: <RepositoryConnectionPage /> },
+      { path: "dependency-mapping", element: <DependencyMappingPage /> },
+      { path: "standards", element: <StandardsSourcePage /> },
+      { path: "iq-collaboration", element: <IqCollaborationPage /> },
+      { path: "modernization", element: <ModernizationPage /> },
+      { path: "phases", element: <PhaseTrackingPage /> },
+      { path: "production-promotion", element: <ProductionPromotionPage /> },
       {
         path: "requirements",
         element: <RequirementsHubPage />,

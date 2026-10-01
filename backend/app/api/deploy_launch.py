@@ -1,9 +1,9 @@
 """Deploy & Launch pipeline API routes.
 
-Exposes the real, nine-step Deploy & Launch pipeline
+Exposes the real Deploy & Launch pipeline
 (``app.deploy_launch.pipeline_service.DeploymentPipelineService``):
-``POST .../start`` (executes every step as soon as the human clicks
-Start - the one gate this stage has), ``GET .../{pipeline_run_id}`` (poll
+``POST .../request-approval`` (creates the required non-production release
+checkpoint), ``POST .../start`` (executes only after approval), ``GET .../{pipeline_run_id}`` (poll
 one run's current status), ``GET .../`` (list every run for this
 session), ``GET .../{pipeline_run_id}/download`` (a zip of the materialized backend
 build plus the generated least-access policy document), and ``DELETE
@@ -22,12 +22,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.dependencies import get_deployment_pipeline_service, get_session_service
+from app.api.dependencies import (
+    get_approval_service,
+    get_deployment_pipeline_service,
+    get_session_service,
+)
 from app.deploy_launch.models import DeploymentPipelineRun
 from app.deploy_launch.pipeline_service import (
     DeploymentPipelineService,
     DeploymentPipelineStepFailedError,
 )
+from app.governance.approval_service import ApprovalService
+from app.models.approval_models import ApprovalRequest
 from app.security.auth_models import AuthenticatedUser
 from app.security.dependencies import get_current_user
 from app.services.session_service import SessionNotFoundError, SessionService
@@ -41,9 +47,41 @@ class StartDeploymentRequest(BaseModel):
 
     workflow_run_id: str = Field(min_length=1)
     trace_id: str | None = None
+    approval_request_id: str | None = Field(
+        default=None,
+        description="Approved non-production release request; required for a new run.",
+    )
     resume_from_step: str | None = Field(
         default=None,
         description="If provided, resume from this step instead of starting from the first step. Useful for retrying a failed pipeline.",
+    )
+
+
+class RequestDeploymentApprovalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workflow_run_id: str = Field(min_length=1)
+    trace_id: str | None = None
+
+
+@router.post("/request-approval", status_code=status.HTTP_201_CREATED)
+async def request_deployment_approval(
+    session_id: str,
+    body: RequestDeploymentApprovalBody,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+    approval_service: ApprovalService = Depends(get_approval_service),
+) -> ApprovalRequest:
+    await session_service.get_session(
+        session_id=session_id, requesting_user_id=user.user_id
+    )
+    return await approval_service.request_approval(
+        checkpoint_id="nonproduction-release-approval",
+        session_id=session_id,
+        trace_id=body.trace_id or body.workflow_run_id,
+        requested_by_agent_id="release-agent",
+        subject_type="nonproduction_release",
+        subject_id=body.workflow_run_id,
     )
 
 
@@ -84,6 +122,7 @@ async def start_deployment(
         session_id=session_id,
         requesting_user_id=user.user_id,
         workflow_run_id=body.workflow_run_id,
+        approval_request_id=body.approval_request_id,
         trace_id=body.trace_id,
         resume_from_step=body.resume_from_step,
         requesting_tenant_id=user.tenant_id,

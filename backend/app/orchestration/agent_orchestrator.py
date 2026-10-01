@@ -45,8 +45,11 @@ from app.orchestration.workflow_execution_service import WorkflowExecutionServic
 from app.orchestration.workflow_runtime import WorkflowRuntime
 from app.orchestration.workflow_step_executor import WorkflowStepExecutor
 from app.prompts.registry import PromptRegistry
+from app.repositories.approval_repository import ApprovalRepository
+from app.repositories.governance_event_repository import GovernanceEventRepository
 from app.repositories.recommendation_lineage_repository import (
     InMemoryRecommendationLineageRepository,
+    RecommendationLineageRepository,
 )
 from app.repositories.shared_memory_repository import SharedMemoryRepository
 from app.repositories.workflow_run_repository import (
@@ -355,6 +358,9 @@ def create_agent_orchestrator(
     workflow_event_bus: WorkflowEventBus | None = None,
     workflow_run_repository: WorkflowRunRepository | None = None,
     shared_memory_repository: SharedMemoryRepository | None = None,
+    governance_event_repository: GovernanceEventRepository | None = None,
+    approval_repository: ApprovalRepository | None = None,
+    recommendation_lineage_repository: RecommendationLineageRepository | None = None,
 ) -> AgentOrchestrator:
     """Build an ``AgentOrchestrator`` wired to the externally configured registries.
 
@@ -373,14 +379,17 @@ def create_agent_orchestrator(
     prompt_registry = PromptRegistry.load(settings.prompts_path)
 
     resolved_governance_service = governance_service or create_governance_service(
-        settings=settings
+        settings=settings,
+        event_repository=governance_event_repository,
     )
     resolved_memory_service = memory_service or create_memory_service(
         settings=settings,
         shared_repository=shared_memory_repository,
     )
     resolved_approval_service = approval_service or create_approval_service(
-        settings=settings, governance_service=resolved_governance_service
+        settings=settings,
+        repository=approval_repository,
+        governance_service=resolved_governance_service,
     )
     model_catalog_service = create_model_catalog_service(
         settings=settings, agent_registry=agent_registry
@@ -420,7 +429,8 @@ def create_agent_orchestrator(
         event_bus=resolved_workflow_event_bus,
     )
     recommendation_lineage_service = RecommendationLineageService(
-        InMemoryRecommendationLineageRepository(), governance_service=resolved_governance_service
+        recommendation_lineage_repository or InMemoryRecommendationLineageRepository(),
+        governance_service=resolved_governance_service,
     )
 
     step_executor = WorkflowStepExecutor(

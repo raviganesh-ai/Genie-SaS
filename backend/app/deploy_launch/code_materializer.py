@@ -426,10 +426,9 @@ same-origin calls, persist every uploaded attachment's FULL content to this
 mission's own working directory (never truncated or folded into a single
 chat turn, so every requirement in an uploaded package is genuinely
 considered), and run this mission's own real, deterministic Orchestrator
-Agent (``orchestrator.py``, generated alongside this file) against it. Only
-when that structured run cannot proceed (for example, a free-form
+Agent (``orchestrator.py``, generated alongside this file) against it. When that structured run does not apply (for example, a free-form
 conversational request rather than the JSON payload this mission's own
-input zone(s) compose) does it fall back to a direct conversational reply
+input zone(s) compose), it routes to a direct conversational reply
 from this mission's Orchestrator Agent, already provisioned in Azure AI
 Foundry during the "Deploy Agents to Foundry" pipeline step - the
 Orchestrator Agent itself is never reachable directly from the browser.
@@ -446,6 +445,7 @@ from pathlib import Path
 
 from agent_framework.foundry import FoundryAgent
 from azure.ai.projects.aio import AIProjectClient
+from azure.cosmos.aio import CosmosClient
 from azure.identity.aio import DefaultAzureCredential
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -563,17 +563,12 @@ async def _run_orchestrator_pipeline(
             # An orchestrator generated before the on_progress contract can
             # still run; it simply cannot emit specialist hand-off narration.
             result = await orchestrator.run(message)
-    except Exception:
-        # Generated UI/orchestrator glue can drift even when both components
-        # are individually runnable. Keep the prototype useful: record the
-        # generated pipeline failure, then let the mission's already-provisioned
-        # Orchestrator Agent process the full request and attachment content.
-        _logger.warning(
-            "Orchestrator pipeline run did not complete; falling back to a "
-            "conversational reply.",
-            exc_info=True,
-        )
-        return None
+    except Exception as exc:
+        _logger.exception("Generated mission orchestrator pipeline failed.")
+        raise HTTPException(
+            status_code=503,
+            detail="Generated mission orchestrator pipeline failed.",
+        ) from exc
     return json.dumps(result)
 
 
@@ -608,7 +603,44 @@ async def ready() -> dict[str, str]:
             status_code=503,
             detail="Generated mission orchestrator is not ready.",
         ) from exc
-    return {{"status": "ready"}}
+    endpoint = os.environ["MISSION_DATA_ENDPOINT"]
+    database_name = os.environ["MISSION_DATA_DATABASE_NAME"]
+    container_name = os.environ["MISSION_DATA_CONTAINER_NAME"]
+    validation_id = f"readiness-{{os.urandom(12).hex()}}"
+    partition_key = "readiness"
+    try:
+        async with DefaultAzureCredential() as credential:
+            client = CosmosClient(endpoint, credential=credential)
+            try:
+                container = client.get_database_client(database_name).get_container_client(
+                    container_name
+                )
+                await container.upsert_item(
+                    {{
+                        "id": validation_id,
+                        "partitionKey": partition_key,
+                        "recordType": "readiness-validation",
+                    }}
+                )
+                item = await container.read_item(
+                    item=validation_id,
+                    partition_key=partition_key,
+                )
+                if item.get("id") != validation_id:
+                    raise RuntimeError("Cosmos DB readiness record did not reconcile.")
+                await container.delete_item(
+                    item=validation_id,
+                    partition_key=partition_key,
+                )
+            finally:
+                await client.close()
+    except Exception as exc:
+        _logger.exception("Mission data-layer readiness validation failed.")
+        raise HTTPException(
+            status_code=503,
+            detail="Mission data layer is not ready.",
+        ) from exc
+    return {{"status": "ready", "data_access": "validated"}}
 
 
 @app.post("/invoke", response_model=InvokeResponse)
@@ -789,6 +821,7 @@ _REQUIREMENTS_TXT = """fastapi>=0.115,<1.0
 uvicorn>=0.32,<1.0
 azure-ai-projects>=2.3,<3.0
 azure-identity>=1.19,<2.0
+azure-cosmos>=4.9,<5.0
 agent-framework>=1.0
 """
 

@@ -33,6 +33,23 @@ function renderAppShell() {
   );
 }
 
+function renderWithSessionOnly() {
+  return render(
+    <FluentProvider theme={genieDarkTheme}>
+      <MemoryRouter initialEntries={["/"]}>
+        <SessionProvider initialSessionId={FIXTURE_SESSION_ID}>
+          <Routes>
+            <Route path="/" element={<AppShell />}>
+              <Route index element={<div>Landing page marker</div>} />
+              <Route path="repository-connections" element={<div>Repository page marker</div>} />
+            </Route>
+          </Routes>
+        </SessionProvider>
+      </MemoryRouter>
+    </FluentProvider>,
+  );
+}
+
 describe("AppShell session-expired handling", () => {
   it("shows a 'session has expired' takeover instead of the page when the workflow run poll 404s as an unknown session", async () => {
     mockFetchSequence([
@@ -78,5 +95,46 @@ describe("AppShell session-expired handling", () => {
 
     expect(screen.getByText(/Requirements page marker/i)).toBeInTheDocument();
     expect(screen.queryByText(/Your session has expired/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("AppShell mission navigation", () => {
+  it("disables steps that need a session until one exists, and re-enables them once it does", async () => {
+    mockFetchSequence([{ match: "/peer-review/events", response: [] }]);
+    renderWithSessionOnly();
+
+    // Repository Analysis only needs a created session (not a running
+    // workflow) - FIXTURE_SESSION_ID is set, so it must be a real,
+    // clickable link.
+    const repoLink = screen.getByRole("link", { name: /repository analysis/i });
+    await userEvent.click(repoLink);
+    expect(await screen.findByText(/repository page marker/i)).toBeInTheDocument();
+
+    // Architecture needs an active workflow run, which this render has
+    // none of - it must not be a clickable link at all.
+    expect(screen.queryByRole("link", { name: /architecture/i })).not.toBeInTheDocument();
+    expect(screen.getByText("4. Architecture").closest("[aria-disabled]")).not.toBeNull();
+  });
+
+  it("disables every session-gated step when there is no session at all", () => {
+    mockFetchSequence([{ match: "/peer-review/events", response: [] }]);
+    render(
+      <FluentProvider theme={genieDarkTheme}>
+        <MemoryRouter initialEntries={["/"]}>
+          <SessionProvider>
+            <Routes>
+              <Route path="/" element={<AppShell />}>
+                <Route index element={<div>Landing page marker</div>} />
+              </Route>
+            </Routes>
+          </SessionProvider>
+        </MemoryRouter>
+      </FluentProvider>,
+    );
+
+    expect(screen.queryByRole("link", { name: /repository analysis/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /architecture/i })).not.toBeInTheDocument();
+    // Home is always open regardless of session state.
+    expect(screen.getByRole("link", { name: /home/i })).toBeInTheDocument();
   });
 });

@@ -1,6 +1,10 @@
 """Fail-closed tests for GovernanceProviderValidator (Phase 5)."""
 from __future__ import annotations
 
+import pytest
+
+from app.governance.governance_models import GovernanceProviderError
+from app.governance.governance_service import create_governance_service
 from app.validation.governance_provider_validator import GovernanceProviderValidator
 
 
@@ -46,3 +50,10 @@ def test_fails_closed_when_approval_policy_has_no_checkpoints(local_settings):
     )
     result = GovernanceProviderValidator().validate(local_settings)
     assert not result.passed
+
+
+def test_agent365_configuration_requires_injected_provider(
+    foundry_configured_settings,
+):
+    with pytest.raises(GovernanceProviderError, match="no Agent365GovernanceProvider"):
+        create_governance_service(settings=foundry_configured_settings)

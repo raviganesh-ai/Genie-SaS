@@ -1,10 +1,4 @@
-"""Agent execution gateway selection.
-
-Genie is a personal dev/demo deployment with no separate production tier.
-``AzureAgentGateway`` executes real Azure AI Foundry agents whenever
-Foundry is configured; ``LocalAgentGateway`` is a deterministic,
-no-network stand-in for local development. See ``create_agent_gateway``
-below for the exact selection rule.
+"""Azure AI Foundry-only agent execution gateway.
 
 This module (and ``azure_agent_gateway.py``) contain no agent reasoning of
 any kind. Every Genie business agent is an independently deployed Azure AI
@@ -143,49 +137,6 @@ def resolve_prompt_text(prompt_registry: PromptRegistry, request: AgentExecution
         ) from exc
 
 
-class LocalAgentGateway:
-    """Deterministic, non-network agent execution for local development only.
-
-    ``create_agent_gateway`` below only returns this gateway when
-    ``allow_local_agents`` is True. It performs no reasoning of any kind -
-    it only proves that agent/prompt resolution succeeded, so developers
-    can exercise the request/response contract without needing real Azure
-    AI Foundry credentials.
-    """
-
-    def __init__(self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry) -> None:
-        self._agent_registry = agent_registry
-        self._prompt_registry = prompt_registry
-
-    async def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
-        agent = get_enabled_agent(self._agent_registry, request.agent_id)
-        resolved_text = resolve_prompt_text(self._prompt_registry, request)
-        output_text = (
-            f"[local-agent-gateway] agent='{agent.id}' "
-            f"resolved_prompt_length={len(resolved_text)}"
-        )
-        return AgentExecutionResult(
-            agent_id=agent.id,
-            model_deployment_ref=agent.model_deployment_ref or "",
-            output_text=output_text,
-            correlation_id=request.correlation_id,
-        )
-
-    async def execute_stream(
-        self, request: AgentExecutionRequest
-    ) -> AsyncIterator[AgentExecutionStreamChunk]:
-        """Yields the same deterministic text as ``execute``, as a single chunk.
-
-        Dev-only stand-in: there is no real model to stream tokens from, so
-        this simply mirrors ``execute``'s output in one delta followed by
-        the final chunk, keeping the two methods behaviorally consistent.
-        """
-
-        result = await self.execute(request)
-        yield AgentExecutionStreamChunk(delta=result.output_text)
-        yield AgentExecutionStreamChunk(result=result)
-
-
 def create_agent_gateway(
     *,
     settings: Settings,
@@ -195,58 +146,39 @@ def create_agent_gateway(
     session_agent_resolver: SessionAgentResolver | None = None,
     tool_registry: AgentToolRegistry | None = None,
 ) -> AgentGateway:
-    """Select the single execution gateway for the current configuration.
-
-    ``LocalAgentGateway`` when ``allow_local_agents`` is True, otherwise
-    ``AzureAgentGateway`` if Foundry is configured, otherwise raises
-    (fail closed).
+    """Create the single Azure AI Foundry execution gateway.
 
     ``session_agent_resolver``, when supplied, lets ``AzureAgentGateway``
     route a given session's executions to that session's own dedicated
     Foundry agents (see ``CustomerAgentProvisioningService``) instead of the
-    shared catalog pool - ignored by ``LocalAgentGateway``.
+    shared catalog pool.
 
     ``tool_registry``, when supplied, lets ``AzureAgentGateway``'s Foundry
-    runs resolve and execute function-tool calls (see
-    ``app.agents.tool_execution.AgentToolRegistry``) - ignored by
-    ``LocalAgentGateway``. A run that reaches ``requires_action`` with no
-    registry configured fails closed.
+    runs resolve and execute function-tool calls. A run that reaches
+    ``requires_action`` with no registry configured fails closed.
     """
 
-    # Local import: keeps the (lazily-imported) azure-ai-projects SDK import
-    # chain out of the local/dev hot path and avoids a circular import, since
-    # azure_agent_gateway.py imports helpers from this module.
+    # Local import avoids a circular import because azure_agent_gateway.py
+    # imports prompt/agent resolution helpers from this module.
     from app.agents.azure_agent_gateway import AzureAgentGateway
     from app.agents.foundry.agent_provider import FoundryAgentProvider
     from app.agents.foundry.project_service import FoundryProjectService
 
     recorder = governance_recorder or NullGovernanceTraceRecorder()
 
-    def _build_azure_gateway() -> AgentGateway:
-        if not settings.azure_foundry_endpoint or not settings.azure_foundry_project_name:
-            raise AgentGatewayError(
-                "azure_foundry_endpoint and azure_foundry_project_name must be "
-                "configured to use AzureAgentGateway."
-            )
-        project_service = FoundryProjectService(
-            endpoint=settings.azure_foundry_endpoint,
-            project_name=settings.azure_foundry_project_name,
+    if not settings.azure_foundry_endpoint or not settings.azure_foundry_project_name:
+        raise AgentGatewayError(
+            "azure_foundry_endpoint and azure_foundry_project_name are required; "
+            "Genie does not provide a local or mock agent execution path."
         )
-        return AzureAgentGateway(
-            agent_registry=agent_registry,
-            prompt_registry=prompt_registry,
-            foundry_client=FoundryAgentProvider(project_service, tool_registry=tool_registry),
-            governance_recorder=recorder,
-            session_agent_resolver=session_agent_resolver,
-        )
-
-    if settings.allow_local_agents:
-        return LocalAgentGateway(agent_registry, prompt_registry)
-
-    if settings.azure_foundry_endpoint and settings.azure_foundry_project_name:
-        return _build_azure_gateway()
-
-    raise AgentGatewayError(
-        "No usable agent execution gateway: allow_local_agents is False and "
-        "Azure AI Foundry is not configured."
+    project_service = FoundryProjectService(
+        endpoint=settings.azure_foundry_endpoint,
+        project_name=settings.azure_foundry_project_name,
+    )
+    return AzureAgentGateway(
+        agent_registry=agent_registry,
+        prompt_registry=prompt_registry,
+        foundry_client=FoundryAgentProvider(project_service, tool_registry=tool_registry),
+        governance_recorder=recorder,
+        session_agent_resolver=session_agent_resolver,
     )

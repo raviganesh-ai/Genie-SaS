@@ -7,9 +7,15 @@ can change without touching ``RecommendationLineageService`` or any caller.
 from __future__ import annotations
 
 import asyncio
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.models.recommendation_lineage import RecommendationLineage
+
+if TYPE_CHECKING:
+    from app.repositories.document_store import DocumentStore
+
+_PARTITION_KEY = "recommendation-lineage"
+_METADATA_FIELDS = {"partitionKey", "recordType", "_rid", "_self", "_etag", "_attachments", "_ts"}
 
 
 class RecommendationLineageRepository(Protocol):
@@ -59,3 +65,60 @@ class InMemoryRecommendationLineageRepository:
                 for (rec_session_id, _), record in self._records.items()
                 if rec_session_id == session_id
             ]
+
+
+class CosmosRecommendationLineageRepository:
+    """Recommendation lineage persisted through managed-identity Cosmos access."""
+
+    def __init__(self, *, store: DocumentStore) -> None:
+        self._store = store
+
+    async def put(self, lineage: RecommendationLineage) -> None:
+        document = lineage.model_dump(mode="json")
+        document.update(
+            {"partitionKey": _PARTITION_KEY, "recordType": "recommendation-lineage"}
+        )
+        await self._store.upsert(document)
+
+    async def get(
+        self, *, session_id: str, recommendation_id: str
+    ) -> RecommendationLineage | None:
+        documents = await self._store.query(
+            query=(
+                "SELECT * FROM c WHERE c.recordType = @recordType "
+                "AND c.session_id = @sessionId "
+                "AND c.recommendation_id = @recommendationId"
+            ),
+            parameters=[
+                {"name": "@recordType", "value": "recommendation-lineage"},
+                {"name": "@sessionId", "value": session_id},
+                {"name": "@recommendationId", "value": recommendation_id},
+            ],
+            partition_key=_PARTITION_KEY,
+        )
+        if not documents:
+            return None
+        return RecommendationLineage.model_validate(self._payload(documents[0]))
+
+    async def list_for_session(self, *, session_id: str) -> list[RecommendationLineage]:
+        documents = await self._store.query(
+            query=(
+                "SELECT * FROM c WHERE c.recordType = @recordType "
+                "AND c.session_id = @sessionId ORDER BY c.timestamp"
+            ),
+            parameters=[
+                {"name": "@recordType", "value": "recommendation-lineage"},
+                {"name": "@sessionId", "value": session_id},
+            ],
+            partition_key=_PARTITION_KEY,
+        )
+        return [
+            RecommendationLineage.model_validate(self._payload(document))
+            for document in documents
+        ]
+
+    @staticmethod
+    def _payload(document: dict[str, object]) -> dict[str, object]:
+        return {
+            key: value for key, value in document.items() if key not in _METADATA_FIELDS
+        }

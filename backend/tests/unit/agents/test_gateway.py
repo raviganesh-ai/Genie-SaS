@@ -1,7 +1,5 @@
-"""Unit tests for agent/prompt resolution and gateway selection.
+"""Unit tests for agent/prompt resolution and Foundry gateway selection.
 
-Covers ``LocalAgentGateway`` (deterministic, non-network, dev-only) and
-``create_agent_gateway`` (the fail-closed production-vs-local selector).
 Azure AI Foundry execution itself is covered by
 ``test_azure_agent_gateway.py`` and ``foundry/test_agent_provider.py``.
 """
@@ -14,7 +12,6 @@ import pytest
 from app.agents.azure_agent_gateway import AzureAgentGateway
 from app.agents.gateway import (
     AgentGatewayError,
-    LocalAgentGateway,
     PromptResolutionError,
     UnknownAgentError,
     UnknownPromptError,
@@ -51,8 +48,8 @@ def agent_registry(tmp_path: Path) -> AgentRegistry:
         "    enabled: false\n"
         "  - id: no-foundry-agent\n"
         "    name: No Foundry Agent\n"
-        "    role: local_only_role\n"
-        "    description: Only usable via LocalAgentGateway.\n",
+        "    role: invalid_role\n"
+        "    description: Invalid because no Foundry reference is configured.\n",
     )
     return AgentRegistry.load(tmp_path / "agents")
 
@@ -115,50 +112,8 @@ class TestResolutionHelpers:
             resolve_prompt_text(prompt_registry, request)
 
 
-class TestLocalAgentGateway:
-    async def test_execute_returns_deterministic_result(
-        self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
-    ):
-        gateway = LocalAgentGateway(agent_registry, prompt_registry)
-        result = await gateway.execute(_request())
-
-        assert result.agent_id == "requirements-analyst"
-        assert result.correlation_id == "corr-1"
-        assert "local-agent-gateway" in result.output_text
-
-    async def test_execute_raises_for_unknown_agent(
-        self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
-    ):
-        gateway = LocalAgentGateway(agent_registry, prompt_registry)
-        with pytest.raises(UnknownAgentError):
-            await gateway.execute(_request(agent_id="does-not-exist"))
-
-    async def test_execute_stream_yields_one_delta_then_the_same_final_result_as_execute(
-        self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
-    ):
-        gateway = LocalAgentGateway(agent_registry, prompt_registry)
-
-        chunks = [chunk async for chunk in gateway.execute_stream(_request())]
-
-        deltas = [chunk.delta for chunk in chunks if chunk.delta is not None]
-        results = [chunk.result for chunk in chunks if chunk.result is not None]
-        assert len(deltas) == 1
-        assert len(results) == 1
-        assert results[0].agent_id == "requirements-analyst"
-        assert deltas[0] == results[0].output_text
-
-
 class TestCreateAgentGateway:
-    def test_local_mode_with_allow_local_agents_returns_local_gateway(
-        self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
-    ):
-        settings = Settings(allow_local_agents=True)
-        gateway = create_agent_gateway(
-            settings=settings, agent_registry=agent_registry, prompt_registry=prompt_registry
-        )
-        assert isinstance(gateway, LocalAgentGateway)
-
-    def test_local_mode_without_local_agents_falls_through_to_azure_if_configured(
+    def test_foundry_configuration_returns_azure_gateway(
         self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
     ):
         settings = Settings(
@@ -171,21 +126,21 @@ class TestCreateAgentGateway:
         )
         assert isinstance(gateway, AzureAgentGateway)
 
-    def test_local_mode_without_local_agents_or_foundry_raises(
+    def test_missing_foundry_configuration_raises(
         self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
     ):
         settings = Settings(allow_local_agents=False)
-        with pytest.raises(AgentGatewayError, match="No usable agent execution gateway"):
+        with pytest.raises(AgentGatewayError, match="Foundry"):
             create_agent_gateway(
                 settings=settings, agent_registry=agent_registry, prompt_registry=prompt_registry
             )
 
-    def test_azure_gateway_used_when_local_agents_disallowed_and_foundry_configured(
+    def test_legacy_local_flag_cannot_override_foundry_gateway(
         self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
     ):
         settings = Settings(
             allow_mock_agents=False,
-            allow_local_agents=False,
+            allow_local_agents=True,
             use_synthetic_data=False,
             azure_foundry_endpoint="https://genie-foundry.example-project.azure.com",
             azure_foundry_project_name="genie-project",

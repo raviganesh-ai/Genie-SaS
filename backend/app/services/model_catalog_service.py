@@ -100,6 +100,13 @@ class ModelCatalogService:
         return sorted(models)
 
     def _resource_group_name(self) -> str | None:
+        # The Foundry account may live in a different resource group than
+        # where Deploy & Launch provisions new customer deployments (e.g. a
+        # dedicated environment reusing an existing Foundry project) - see
+        # Settings.azure_foundry_resource_group.
+        foundry_value = self._settings.azure_foundry_resource_group
+        if foundry_value and foundry_value.strip():
+            return foundry_value.strip()
         value = self._settings.deployment_resource_group
         return value.strip() if value and value.strip() else None
 

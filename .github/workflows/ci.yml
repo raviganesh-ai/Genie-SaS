@@ -95,6 +95,7 @@ jobs:
           [ -z "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" ] && missing+=("GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL")
           [ -z "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}" ] && missing+=("GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME")
           [ -z "${{ vars.GENIE_GATEWAY_ALLOWED_ORIGIN }}" ] && missing+=("GENIE_GATEWAY_ALLOWED_ORIGIN")
+          [ -z "${{ secrets.GENIE_GITHUB_MCP_TOKEN }}" ] && missing+=("GENIE_GITHUB_MCP_TOKEN")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error::Missing required settings for prepare-gateway: ${missing[*]}. See README.md 'Continuous deployment' section."
             exit 1
@@ -192,6 +193,17 @@ jobs:
             -PublisherEmail "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" `
             -PublisherName "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}"
 
+      - name: Configure GitHub MCP credential
+        shell: pwsh
+        run: |
+          az containerapp secret set `
+            --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" `
+            --secrets "github-mcp-token=${{ secrets.GENIE_GITHUB_MCP_TOKEN }}" `
+            --only-show-errors `
+            --output none
+
       # The immutable image, retired-sidecar removal, CORS setting, probes,
       # and ingress port 8000 are applied in one ARM patch, then verified
       # through APIM because direct backend ingress is private.
@@ -206,6 +218,8 @@ jobs:
             -AllowedOrigin "${{ vars.GENIE_GATEWAY_ALLOWED_ORIGIN }}" `
             -GatewayUrl "${{ needs.prepare-gateway.outputs.gateway-url }}" `
             -MemoryStoreEndpoint "${{ vars.GENIE_MEMORY_STORE_ENDPOINT }}" `
+            -GitHubMcpEndpoint "https://api.githubcopilot.com/mcp/" `
+            -GitHubMcpTokenSecretName "github-mcp-token" `
             -PrototypeApiGatewayPublisherEmail "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL }}" `
             -PrototypeApiGatewayPublisherName "${{ vars.GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME }}" `
             -PrototypeMaxActivePerOwner ${{ vars.GENIE_PROTOTYPE_MAX_ACTIVE_PER_OWNER }} `
@@ -259,4 +273,3 @@ jobs:
       - name: Deploy to Azure Static Web Apps
         timeout-minutes: 5
         run: npx --yes @azure/static-web-apps-cli@latest deploy ./dist --deployment-token "${{ secrets.SWA_DEPLOYMENT_TOKEN }}" --env production
-

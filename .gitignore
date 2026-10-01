@@ -16,6 +16,8 @@ venv/
 .env
 *.env.local
 .env.*
+!.env.example
+!*.env.example
 
 # Generated deployment artifacts (contain subscription-specific values)
 infra/roles/*.generated.json

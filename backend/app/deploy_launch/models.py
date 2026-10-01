@@ -40,8 +40,11 @@ __all__ = [
 ]
 
 DeploymentStepId = Literal[
+    "validate-deployment-contract",
     "generate-access-policy",
     "provision-foundry-agents",
+    "provision-data-layer",
+    "validate-data-schema",
     "deploy-backend-service",
     "sync-frontend-integration",
     "deploy-frontend-app",
@@ -57,19 +60,26 @@ DeploymentStepId = Literal[
 # persisted runs from adjacent revisions can be recovered and cleaned up, but
 # they are intentionally absent from this execution order.
 DEPLOYMENT_STEP_ORDER: tuple[DeploymentStepId, ...] = (
+    "validate-deployment-contract",
     "generate-access-policy",
     "provision-foundry-agents",
+    "provision-data-layer",
+    "validate-data-schema",
     "deploy-backend-service",
     "sync-frontend-integration",
     "deploy-frontend-app",
     "generate-test-suite",
     "execute-test-suite",
+    "run-security-scan",
     "launch-mission",
 )
 
 DEPLOYMENT_STEP_NAMES: dict[DeploymentStepId, str] = {
+    "validate-deployment-contract": "Validate Deployment Contract",
     "generate-access-policy": "Generate Access Policy & Least Access",
     "provision-foundry-agents": "Deploy Agents to Foundry",
+    "provision-data-layer": "Provision Data Layer",
+    "validate-data-schema": "Apply & Validate Data Schema",
     "deploy-backend-service": "Deploy Backend Service",
     "sync-frontend-integration": "Update Frontend Integrations",
     "deploy-frontend-app": "Deploy Frontend",
@@ -243,6 +253,12 @@ class DeploymentPipelineRun(BaseModel):
     steps: list[DeploymentStepResult] = Field(default_factory=list)
     access_policy: AccessPolicyDocument | None = None
     provisioned_agents: list[ProvisionedAgentStatus] = Field(default_factory=list)
+    data_account_name: str | None = None
+    data_endpoint: str | None = None
+    data_database_name: str | None = None
+    data_container_name: str | None = None
+    data_container_resource_id: str | None = None
+    data_schema_version: str | None = None
     backend_url: str | None = None
     frontend_url: str | None = None
     launch_url: str | None = None

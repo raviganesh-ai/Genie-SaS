@@ -52,13 +52,10 @@ class Settings(BaseSettings):
     environment: Environment = "development"
     log_level: str = "INFO"
 
-    # --- Execution mode -----------------------------------------------------------
-    # Genie is a personal dev/demo deployment - there is no separate
-    # production tier, so these flags simply choose real Azure services
-    # (Foundry, etc.) when configured, falling back to local/mock stand-ins
-    # otherwise. See app.agents.gateway.create_agent_gateway and its sibling
-    # factories (governance, customer/mission agent provisioning, deploy
-    # pipeline, speech-to-text) for exactly how each one is selected.
+    # --- Execution safety -------------------------------------------------------
+    # Legacy flags remain parseable so unsafe deployment manifests fail with
+    # explicit validation errors instead of being silently ignored. Genie
+    # never permits these modes; all agent execution uses Azure AI Foundry.
     governance_provider: GovernanceProviderName = "local"
     allow_mock_agents: bool = False
     allow_local_agents: bool = False
@@ -67,6 +64,19 @@ class Settings(BaseSettings):
     # --- Azure AI Foundry ---------------------------------------------------------
     azure_foundry_endpoint: str | None = None
     azure_foundry_project_name: str | None = None
+    # Resource group that actually contains the Foundry account identified by
+    # azure_foundry_endpoint - needed for ARM-level lookups against that
+    # account (e.g. listing model deployments; see
+    # app.services.model_catalog_service). This is deliberately a separate
+    # setting from deployment_resource_group: a Genie-SaS environment may
+    # provision its own dedicated infrastructure (Cosmos DB, Key Vault,
+    # Container Apps, ...) while intentionally reusing an existing Foundry
+    # project that lives in a different resource group, to avoid the cost
+    # and delay of re-registering every Foundry agent. Falls back to
+    # deployment_resource_group when unset, which preserves prior behavior
+    # for environments where the Foundry account and the Deploy & Launch
+    # target resource group are the same.
+    azure_foundry_resource_group: str | None = None
     azure_retail_prices_endpoint: str = "https://prices.azure.com/api/retail/prices"
 
     # --- Azure Content Understanding (customer evidence ingestion) --------------
@@ -127,6 +137,94 @@ class Settings(BaseSettings):
     # --- Security -------------------------------------------------------------------
     key_vault_uri: str | None = None
 
+    # --- GitHub MCP repository evidence -----------------------------------------
+    # Uses the ministry-demo integration pattern: Genie calls an externally
+    # hosted GitHub MCP server with an administrator-provisioned bearer token.
+    # The endpoint and token environment-variable name are externalized. The
+    # deployment must populate that variable through a Key Vault-backed
+    # Container Apps/App Service secret reference; the token is never accepted
+    # from the browser or represented as a typed application setting.
+    github_mcp_enabled: bool = False
+    github_mcp_endpoint: str | None = None
+    github_mcp_token_env_var: str | None = None
+    github_mcp_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    repository_assessment_max_files: int = Field(default=1000, ge=1, le=10000)
+    repository_assessment_max_depth: int = Field(default=20, ge=1, le=100)
+    repository_assessment_max_source_bytes: int = Field(
+        default=1_000_000, ge=1024, le=10_000_000
+    )
+
+    # --- IQ evidence providers -------------------------------------------------
+    # Provider-specific tool names and query argument names are externalized
+    # because Genie validates the real MCP capability contract at runtime
+    # instead of inventing undocumented Work IQ, Foundry IQ, Fabric IQ, or
+    # Foundry MCP APIs.
+    #
+    # Work IQ and Fabric IQ are DELEGATED providers: Microsoft's own
+    # documentation confirms neither supports application-only/
+    # service-principal authentication (see
+    # docs/architecture/genie-sas-microsoft-iq.md "Official Microsoft
+    # references"), so they have no static token_env_var - see the
+    # "Delegated Microsoft Entra OAuth" block below for their auth config.
+    work_iq_enabled: bool = False
+    work_iq_mcp_endpoint: str | None = None
+    work_iq_retrieve_tool: str | None = None
+    work_iq_query_argument: str = "query"
+    foundry_iq_enabled: bool = False
+    foundry_iq_mcp_endpoint: str | None = None
+    foundry_iq_token_env_var: str | None = None
+    foundry_iq_retrieve_tool: str | None = None
+    foundry_iq_query_argument: str = "query"
+    fabric_iq_enabled: bool = False
+    fabric_iq_mcp_endpoint: str | None = None
+    fabric_iq_retrieve_tool: str | None = None
+    fabric_iq_query_argument: str = "query"
+    # Microsoft's Foundry MCP server (https://mcp.ai.azure.com) is currently
+    # documented only for interactive developer clients (VS Code + Entra ID
+    # sign-in) - see docs/architecture/genie-sas-microsoft-iq.md "Microsoft
+    # Foundry MCP". No service-principal/application-only auth path is
+    # published, so this stays disabled by default until an administrator
+    # provisions a delegated token out-of-band, same as Foundry IQ.
+    foundry_mcp_enabled: bool = False
+    foundry_mcp_endpoint: str | None = None
+    foundry_mcp_token_env_var: str | None = None
+    foundry_mcp_retrieve_tool: str | None = None
+    foundry_mcp_query_argument: str = "query"
+    iq_mcp_timeout_seconds: float = Field(default=60, gt=0, le=300)
+
+    # --- Delegated Microsoft Entra OAuth (Work IQ / Fabric IQ only) -------------
+    # One confidential-client Entra app registration Genie-SaS itself owns,
+    # used ONLY to obtain a per-session, per-user delegated token for these
+    # two IQ providers via authorization-code + PKCE - see
+    # docs/architecture/genie-sas-microsoft-iq.md. This does not reintroduce
+    # interactive sign-in for Genie-SaS itself (see README.md
+    # "Authentication"); normal Genie usage remains anonymous. Only a user
+    # who explicitly clicks "Connect Microsoft 365" goes through this flow.
+    iq_oauth_tenant_id: str | None = None
+    iq_oauth_client_id: str | None = None
+    iq_oauth_client_secret_env_var: str | None = None
+    iq_oauth_redirect_uri: str | None = None
+    iq_oauth_state_ttl_seconds: float = Field(default=600, gt=0, le=3600)
+    # Space-separated delegated OAuth scopes. Work IQ has one confirmed,
+    # documented scope and falls back to it when unset (see
+    # app.iq.microsoft_resource_registry); Fabric IQ's exact scope strings
+    # depend on how the administrator exposed the Power BI Service API
+    # permissions in this app registration, so it has no default.
+    work_iq_scopes: str | None = None
+    fabric_iq_scopes: str | None = None
+    # Safe environment restriction (Phase 13): even with full OAuth config
+    # present, delegated Work IQ/Fabric IQ must not be enabled in production
+    # without this additional, separately-set flag.
+    iq_delegated_oauth_allowed_in_production: bool = False
+
+    @property
+    def work_iq_scopes_list(self) -> tuple[str, ...] | None:
+        return tuple(self.work_iq_scopes.split()) if self.work_iq_scopes else None
+
+    @property
+    def fabric_iq_scopes_list(self) -> tuple[str, ...] | None:
+        return tuple(self.fabric_iq_scopes.split()) if self.fabric_iq_scopes else None
+
     # Id of the workflow step (config/workflows/*.yaml) whose output_text
     # carries the Requirements Analyst agent's structured agentic-workflow
     # qualification verdict (see app.services.requirements_service). Mirrors
@@ -165,6 +263,9 @@ class Settings(BaseSettings):
     deployment_container_apps_environment_id: str | None = None
     deployment_storage_account_name: str | None = None
     deployment_location: str | None = None
+    production_resource_group: str | None = None
+    production_canary_weight_percent: int = Field(default=10, ge=1, le=50)
+    production_health_timeout_seconds: float = Field(default=30, gt=0, le=300)
     prototype_api_gateway_enabled: bool = False
     prototype_api_gateway_publisher_email: str | None = None
     prototype_api_gateway_publisher_name: str | None = None
@@ -219,9 +320,28 @@ class Settings(BaseSettings):
 
     @field_validator(
         "azure_foundry_endpoint",
+        "azure_foundry_resource_group",
         "azure_content_understanding_endpoint",
         "azure_speech_endpoint",
         "key_vault_uri",
+        "github_mcp_endpoint",
+        "github_mcp_token_env_var",
+        "work_iq_mcp_endpoint",
+        "work_iq_retrieve_tool",
+        "foundry_iq_mcp_endpoint",
+        "foundry_iq_token_env_var",
+        "foundry_iq_retrieve_tool",
+        "fabric_iq_mcp_endpoint",
+        "fabric_iq_retrieve_tool",
+        "foundry_mcp_endpoint",
+        "foundry_mcp_token_env_var",
+        "foundry_mcp_retrieve_tool",
+        "iq_oauth_tenant_id",
+        "iq_oauth_client_id",
+        "iq_oauth_client_secret_env_var",
+        "iq_oauth_redirect_uri",
+        "work_iq_scopes",
+        "fabric_iq_scopes",
         "memory_store_endpoint",
         "lineage_store_endpoint",
         "azure_subscription_id",
@@ -230,6 +350,7 @@ class Settings(BaseSettings):
         "deployment_container_apps_environment_id",
         "deployment_storage_account_name",
         "deployment_location",
+        "production_resource_group",
         "prototype_api_gateway_publisher_email",
         "prototype_api_gateway_publisher_name",
         mode="after",

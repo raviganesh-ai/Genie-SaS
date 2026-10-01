@@ -13,8 +13,7 @@
 # server-generated), used with the versioned azure-ai-projects
 # agents.get/create_version/delete API (NOT a raw classic Assistants API
 # "asst_..." id). It is required for AzureAgentGateway to execute the
-# agent in production; it may be left unset for agents only ever exercised
-# through LocalAgentGateway during local development. The values below
+# agent. Genie has no local or mock agent execution path. The values below
 # match each agent's own `id` for readability and are provisioned via
 # scripts/provision_foundry_agents.py - they name a resource, not a
 # secret, so unlike endpoints/keys they are fine to declare here directly.

@@ -297,6 +297,9 @@ class BackendDeploymentService:
         mission_slug: str,
         build_root: Path,
         mission_identity_resource_id: str | None = None,
+        data_endpoint: str | None = None,
+        data_database_name: str | None = None,
+        data_container_name: str | None = None,
         on_progress: DeploymentProgressCallback | None = None,
     ) -> BackendDeploymentResult:
         """Builds ``build_root`` (must contain its own ``Dockerfile``) in ACR and
@@ -483,6 +486,18 @@ class BackendDeploymentService:
                 EnvironmentVar(name="FOUNDRY_PROJECT_NAME", value=self._foundry_project_name),
                 EnvironmentVar(name="FOUNDRY_ORCHESTRATOR_AGENT_VERSION", value="1"),
             ]
+            if data_endpoint and data_database_name and data_container_name:
+                env_vars.extend(
+                    [
+                        EnvironmentVar(name="MISSION_DATA_ENDPOINT", value=data_endpoint),
+                        EnvironmentVar(
+                            name="MISSION_DATA_DATABASE_NAME", value=data_database_name
+                        ),
+                        EnvironmentVar(
+                            name="MISSION_DATA_CONTAINER_NAME", value=data_container_name
+                        ),
+                    ]
+                )
             # Build the Container App envelope with mission-specific managed identity.
             # If mission_identity_resource_id is provided, assign the user-assigned
             # identity to the Container App - this identity has been pre-provisioned
@@ -597,9 +612,18 @@ class NullBackendDeploymentService:
         mission_slug: str,
         build_root: Path,
         mission_identity_resource_id: str | None = None,
+        data_endpoint: str | None = None,
+        data_database_name: str | None = None,
+        data_container_name: str | None = None,
         on_progress: DeploymentProgressCallback | None = None,
     ) -> BackendDeploymentResult:
-        del build_root, mission_identity_resource_id
+        del (
+            build_root,
+            mission_identity_resource_id,
+            data_endpoint,
+            data_database_name,
+            data_container_name,
+        )
         if on_progress is not None:
             await on_progress("Deploying backend service (local mode, no real Azure calls)...")
         return BackendDeploymentResult(

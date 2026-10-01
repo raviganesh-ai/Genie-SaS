@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Checkbox, Text } from "@fluentui/react-components";
+import { Button, Checkbox } from "@fluentui/react-components";
 import { useNavigate } from "react-router-dom";
 import { useSessionContext } from "@/state/SessionContext";
 import { useWorkshop } from "@/hooks/useWorkshop";
@@ -9,6 +9,7 @@ import { getTraceId } from "@/state/traceRegistry";
 import { ApiError } from "@/services/httpClient";
 import { PageHeader } from "@/layouts/AppShell";
 import { ErrorState } from "@/components/ErrorState";
+import { NoActiveMissionState } from "@/components/NoActiveMissionState";
 import { SectionCard } from "@/components/SectionCard";
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { useWorkflowEventStream, workflowStepDeltaKey } from "@/hooks/useWorkflowEventStream";
@@ -215,12 +216,10 @@ export function WorkshopPage(): JSX.Element {
 
   if (!workflowRunId || !sessionId) {
     return (
-      <div>
-        <PageHeader title="Workshop" />
-        <Text size={300} style={{ opacity: 0.7 }}>
-          Start a workflow run from Upload to open the workshop.
-        </Text>
-      </div>
+      <NoActiveMissionState
+        title="Workshop"
+        message="Start a mission from Home and get through Architecture first to open the workshop."
+      />
     );
   }
 

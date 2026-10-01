@@ -20,6 +20,7 @@ import { getTraceId } from "@/state/traceRegistry";
 import { PageHeader } from "@/layouts/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import { ErrorState } from "@/components/ErrorState";
+import { NoActiveMissionState } from "@/components/NoActiveMissionState";
 import { SectionCard } from "@/components/SectionCard";
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { useWorkflowEventStream } from "@/hooks/useWorkflowEventStream";
@@ -324,12 +325,10 @@ export function ArchitectureStudioPage(): JSX.Element {
 
   if (!workflowRunId) {
     return (
-      <div>
-        <PageHeader title="Architecture Studio" />
-        <Text size={300} style={{ opacity: 0.7 }}>
-          Start a workflow run from Upload to see architecture recommendations.
-        </Text>
-      </div>
+      <NoActiveMissionState
+        title="Architecture Studio"
+        message="Start a mission from Home (Discover requirements, Understand code, or Design the solution) to see architecture recommendations here."
+      />
     );
   }
 

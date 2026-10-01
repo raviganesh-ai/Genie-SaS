@@ -30,6 +30,8 @@ from app.governance.approval_service import (
     UnknownApprovalCheckpointError,
     UnknownApprovalRequestError,
 )
+from app.iq.delegated_connection_manager import DelegatedConnectionError
+from app.iq.delegated_token_broker import DelegatedAuthError
 from app.memory.memory_models import MemoryAccessDeniedError
 from app.orchestration.reanalysis_service import ReanalysisRoutingError
 from app.orchestration.workflow_execution_service import UnknownWorkflowRunError
@@ -66,6 +68,15 @@ _NOT_FOUND_ERRORS = (
 
 _FORBIDDEN_ERRORS = (SessionAccessDeniedError,)
 
+# Delegated Microsoft IQ connection errors are surfaced as 401: the caller
+# (frontend) needs the user to (re)connect/authenticate, not retry the same
+# request. `DelegatedAuthError` covers every delegated-auth failure
+# category (authentication_required, consent_required, session_expired,
+# tenant_mismatch, permission_denied) - the response body's message still
+# distinguishes them; see app.iq.models.IqStatus for the full vocabulary
+# surfaced through provider/connection status endpoints.
+_UNAUTHORIZED_ERRORS = (DelegatedConnectionError, DelegatedAuthError)
+
 _CONFLICT_ERRORS = (
     ApprovalAlreadyDecidedError,
     ApprovalExpiredError,
@@ -79,6 +90,8 @@ _UNPROCESSABLE_ERRORS = (MaterializedCodeError, DeploymentPipelineStepFailedErro
 def _status_code_for(exc: Exception) -> int:
     if isinstance(exc, _FORBIDDEN_ERRORS):
         return status.HTTP_403_FORBIDDEN
+    if isinstance(exc, _UNAUTHORIZED_ERRORS):
+        return status.HTTP_401_UNAUTHORIZED
     if isinstance(exc, _NOT_FOUND_ERRORS):
         return status.HTTP_404_NOT_FOUND
     if isinstance(exc, _CONFLICT_ERRORS):

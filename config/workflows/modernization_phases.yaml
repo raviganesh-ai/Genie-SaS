@@ -1,0 +1,54 @@
+version: "1.0"
+# WorkflowRegistry loads every YAML file in this directory. This catalog does
+# not add an executable agent workflow; its phase tasks are operational state.
+workflows: []
+phases:
+  - id: phase-0
+    name: Foundation and live provider readiness
+    tasks:
+      - id: validate-runtime
+        name: Validate runtime, configuration, providers, registries, policies, and prompts
+      - id: verify-foundry-agents
+        name: Verify every enabled production agent in Azure AI Foundry
+  - id: phase-1
+    name: Repository intake and dependency mapping
+    tasks:
+      - id: bind-repositories
+        name: Bind commit-pinned Code, Architecture, and Standards repositories
+      - id: generate-context-graph
+        name: Generate dependency and integration context graphs with coverage gaps
+  - id: phase-2
+    name: Architecture standards
+    tasks:
+      - id: ingest-standards
+        name: Ingest cited architecture standards and detect conflicts
+      - id: evaluate-conformance
+        name: Evaluate repository evidence against governed standards
+  - id: phase-3
+    name: IQ-assisted intake
+    tasks:
+      - id: verify-iq-providers
+        name: Verify enabled Work IQ, Foundry IQ, and Fabric IQ contracts
+      - id: confirm-iq-evidence
+        name: Review, confirm, and promote governed IQ evidence
+  - id: phase-4
+    name: Governed modernization
+    tasks:
+      - id: generate-modernization-plan
+        name: Generate a structured modernization plan through the Foundry Build Agent
+      - id: open-governed-pull-request
+        name: Apply an approved plan on a branch and open a draft pull request
+  - id: phase-5
+    name: Non-production migration
+    tasks:
+      - id: provision-nonproduction
+        name: Provision Foundry agents, backend, frontend, identity, and data layer
+      - id: validate-live-migration
+        name: Validate live behavior, security, data, rollback, and reconciliation
+  - id: phase-6
+    name: Production promotion
+    tasks:
+      - id: rehearse-production
+        name: Complete production rehearsal and obtain explicit approval
+      - id: promote-production
+        name: Execute canary promotion, health validation, rollback controls, and sign-off

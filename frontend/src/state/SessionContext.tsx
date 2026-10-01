@@ -3,9 +3,27 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import type { SafeError } from "@/types/common";
 
+/**
+ * What the user actually asked Genie to do, chosen on the Home page.
+ * Drives AppShell's adaptive Mission Flow (different asks don't all need
+ * the same seven steps) - see AppShell.tsx's MISSION_KIND_STEPS. `null`
+ * means "unknown/legacy" (e.g. a session created before this existed, or
+ * a direct deep link) and falls back to showing every step.
+ *
+ * Deliberately excludes things like "govern" or "deploy" - those only make
+ * sense partway through an existing mission, never as a blank-session
+ * starting point, so they're not valid fresh-start kinds.
+ */
+export type MissionKind =
+  | "discover_requirements"
+  | "understand_code"
+  | "design_solution"
+  | "modernize_and_deliver";
+
 export interface SessionContextValue {
   sessionId: string | null;
   workflowRunId: string | null;
+  missionKind: MissionKind | null;
   /** Timestamp (ms) the user last clicked "Start Prototyping", or null if no
    * mission is currently underway. Lets the Agent Triage panel show a live
    * "clicked -> orchestrator engaged" mission console without the Upload
@@ -29,6 +47,7 @@ export interface SessionContextValue {
   selectedModelDeploymentRef: string | null;
   setSessionId: (sessionId: string | null) => void;
   setWorkflowRunId: (workflowRunId: string | null) => void;
+  setMissionKind: (missionKind: MissionKind | null) => void;
   setMissionStartedAt: (missionStartedAt: number | null) => void;
   setMissionError: (missionError: SafeError | null) => void;
   setGovernancePolicies: (governancePolicies: string) => void;
@@ -47,6 +66,7 @@ export function SessionProvider({
   children,
   initialSessionId = null,
   initialWorkflowRunId = null,
+  initialMissionKind = null,
   initialMissionStartedAt = null,
   initialMissionError = null,
   initialGovernancePolicies = "",
@@ -56,6 +76,7 @@ export function SessionProvider({
   /** Test-only seams for rendering pages without going through LandingPage. */
   initialSessionId?: string | null;
   initialWorkflowRunId?: string | null;
+  initialMissionKind?: MissionKind | null;
   initialMissionStartedAt?: number | null;
   initialMissionError?: SafeError | null;
   initialGovernancePolicies?: string;
@@ -63,6 +84,7 @@ export function SessionProvider({
 }): JSX.Element {
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId);
   const [workflowRunId, setWorkflowRunId] = useState<string | null>(initialWorkflowRunId);
+  const [missionKind, setMissionKind] = useState<MissionKind | null>(initialMissionKind);
   const [missionStartedAt, setMissionStartedAt] = useState<number | null>(initialMissionStartedAt);
   const [missionError, setMissionError] = useState<SafeError | null>(initialMissionError);
   const [governancePolicies, setGovernancePolicies] = useState<string>(initialGovernancePolicies);
@@ -74,12 +96,14 @@ export function SessionProvider({
     () => ({
       sessionId,
       workflowRunId,
+      missionKind,
       missionStartedAt,
       missionError,
       governancePolicies,
       selectedModelDeploymentRef,
       setSessionId,
       setWorkflowRunId,
+      setMissionKind,
       setMissionStartedAt,
       setMissionError,
       setGovernancePolicies,
@@ -88,6 +112,7 @@ export function SessionProvider({
     [
       sessionId,
       workflowRunId,
+      missionKind,
       missionStartedAt,
       missionError,
       governancePolicies,

@@ -322,7 +322,7 @@ e2e/                       Playwright end-to-end tests (scaffolding)
 
 - Python 3.12+
 - Node.js 20+ (LTS)
-- An Azure subscription with an Azure AI Foundry project (for anything beyond `LocalAgentGateway` dev mode)
+- An Azure subscription with an Azure AI Foundry project for every agent execution
 
 ### Backend
 
@@ -337,7 +337,7 @@ python -m venv .venv
 
 > **Windows on ARM64 note:** do not install `uvicorn[standard]` — `httptools` has no `win_arm64` wheel. Use plain `uvicorn`. If `azure-identity`'s dependency resolver pulls a `cryptography` version with no `win_arm64` wheel, run `pip install cryptography --only-binary=:all:` first.
 
-Copy `.env.example` (if present) or set the environment variables listed in [Configuration reference](#configuration-reference). With `GENIE_ALLOW_LOCAL_AGENTS=true` and no Foundry endpoint configured, the backend runs entirely against in-memory stores and `LocalAgentGateway` (no Azure required).
+Copy `backend/.env.example` to `backend/.env` and fill in real values, or set the environment variables listed in [Configuration reference](#configuration-reference). `GENIE_AZURE_FOUNDRY_ENDPOINT` and `GENIE_AZURE_FOUNDRY_PROJECT_NAME` are mandatory. Genie has no local or mock agent execution mode.
 
 ### Frontend
 
@@ -370,6 +370,7 @@ All backend configuration is via environment variables prefixed `GENIE_` (pydant
 | `GENIE_USE_SYNTHETIC_DATA` | `true` | Must be `false` in production |
 | `GENIE_AZURE_FOUNDRY_ENDPOINT` | *(none)* | `https://<account>.services.ai.azure.com/api/projects/<project>` |
 | `GENIE_AZURE_FOUNDRY_PROJECT_NAME` | *(none)* | Foundry project name |
+| `GENIE_AZURE_FOUNDRY_RESOURCE_GROUP` | *(falls back to `GENIE_DEPLOYMENT_RESOURCE_GROUP`)* | Resource group containing the Foundry account, if different from where Deploy & Launch provisions new deployments (e.g. a dedicated environment reusing an existing Foundry project) |
 | `GENIE_AZURE_CONTENT_UNDERSTANDING_ENDPOINT` | *(derived from Foundry endpoint)* | Optional HTTPS AIServices account root URL for document/image evidence analysis |
 | `GENIE_CONTENT_UNDERSTANDING_ANALYZER_ID` | `prebuilt-documentSearch` | Externally selectable Content Understanding analyzer |
 | `GENIE_CONTENT_UNDERSTANDING_API_VERSION` | `2025-11-01` | Pinned GA Content Understanding REST API |
@@ -401,6 +402,23 @@ All backend configuration is via environment variables prefixed `GENIE_` (pydant
 | `GENIE_CORS_ALLOWED_ORIGINS` | *(empty)* | Comma-separated browser origins allowed to call the API (e.g. the deployed frontend's URL) |
 | `GENIE_CONFIG_ROOT` | `config` | Root directory for agents/prompts/workflows/policies |
 | `AZURE_CLIENT_ID` | *(none)* | **Required** when running under a Container App / VM with a **user-assigned** managed identity — tells `DefaultAzureCredential` which identity to use |
+| `GENIE_WORK_IQ_ENABLED` | `false` | Enables the Work IQ IQ provider (delegated Microsoft Entra OAuth) |
+| `GENIE_WORK_IQ_MCP_ENDPOINT` | *(none)* | Microsoft's documented endpoint: `https://workiq.svc.cloud.microsoft/mcp` |
+| `GENIE_WORK_IQ_RETRIEVE_TOOL` | *(none)* | The Work IQ MCP tool name to invoke for retrieval; confirm via `tools/list`, never hardcode blind |
+| `GENIE_WORK_IQ_QUERY_ARGUMENT` | `query` | Tool argument name the configured retrieve tool expects for the query string |
+| `GENIE_WORK_IQ_SCOPES` | *(defaults to the confirmed `WorkIQAgent.Ask` scope)* | Space-separated delegated OAuth scopes requested for Work IQ |
+| `GENIE_FABRIC_IQ_ENABLED` | `false` | Enables the Fabric IQ provider (delegated Microsoft Entra OAuth) |
+| `GENIE_FABRIC_IQ_MCP_ENDPOINT` | *(none)* | Microsoft's documented endpoint: `https://fabriciq.svc.cloud.microsoft/v1/mcp/fabriciq` |
+| `GENIE_FABRIC_IQ_RETRIEVE_TOOL` | *(none)* | The Fabric IQ MCP tool name to invoke; confirm via `tools/list` |
+| `GENIE_FABRIC_IQ_SCOPES` | *(none — required when enabled)* | Space-separated delegated Power BI Service API scopes, confirmed against your own app registration |
+| `GENIE_FOUNDRY_IQ_ENABLED` | `false` | Enables the Foundry IQ provider (administrator-managed static token) |
+| `GENIE_FOUNDRY_MCP_ENABLED` | `false` | Enables the Microsoft Foundry MCP provider (administrator-managed static token; currently unconfirmed for backend use, see `docs/architecture/genie-sas-microsoft-iq.md`) |
+| `GENIE_IQ_OAUTH_TENANT_ID` | *(none)* | Required when Work IQ or Fabric IQ is enabled — the single Entra tenant Genie-SaS's delegated connections are restricted to |
+| `GENIE_IQ_OAUTH_CLIENT_ID` | *(none)* | Genie-SaS's own confidential-client Entra app registration id — see `docs/setup/genie-sas-entra-development.md` |
+| `GENIE_IQ_OAUTH_CLIENT_SECRET_ENV_VAR` | *(none)* | Names the environment variable holding the client secret value — the secret itself is never a typed setting |
+| `GENIE_IQ_OAUTH_REDIRECT_URI` | *(none)* | Must exactly match a **Web** platform redirect URI registered on the app (e.g. `https://<host>/iq/connections/callback`) |
+| `GENIE_IQ_OAUTH_STATE_TTL_SECONDS` | `600` | How long an unclaimed OAuth `state` value remains valid |
+| `GENIE_IQ_DELEGATED_OAUTH_ALLOWED_IN_PRODUCTION` | `false` | Must be explicitly `true`, in addition to full OAuth configuration, before a delegated IQ provider may be enabled in production |
 
 Frontend (`frontend/.env.production` / `.env.development`, Vite `VITE_` prefix):
 

@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Badge, Button, MessageBar, MessageBarBody, MessageBarTitle, Text } from "@fluentui/react-components";
 import { useSessionContext } from "@/state/SessionContext";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { deployLaunchApi } from "@/services/deployLaunchApi";
+import { approvalApi } from "@/services/approvalApi";
 import { getTraceId } from "@/state/traceRegistry";
 import { ApiError } from "@/services/httpClient";
 import { PageHeader } from "@/layouts/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import { ErrorState } from "@/components/ErrorState";
+import { NoActiveMissionState } from "@/components/NoActiveMissionState";
 import { SectionCard } from "@/components/SectionCard";
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { useWorkflowEventStream } from "@/hooks/useWorkflowEventStream";
@@ -17,6 +20,7 @@ import type {
   DeploymentStepResult,
   ProvisionedAgentStatus,
 } from "@/types/deployLaunch";
+import type { ApprovalRequest } from "@/types/governance";
 
 const POLL_MS = 4000;
 
@@ -53,14 +57,19 @@ const AGENT_STATUS_LABELS: Record<ProvisionedAgentStatus["status"], string> = {
 // message rather than a silent, static "Not Started" list. Mirrors the same
 // convention used on Requirement Discovery/Workshop.
 const STEP_WORKING_LABELS: Record<DeploymentStepId, string> = {
+  "validate-deployment-contract": "Genie is validating the complete Azure deployment contract...",
   "generate-access-policy": "Genie is working with the Orchestrator to generate your least-access policy...",
   "provision-foundry-agents": "Genie is working with Azure AI Foundry to deploy your mission agents...",
+  "provision-data-layer": "Genie is provisioning the managed-identity Cosmos DB data layer...",
+  "validate-data-schema": "Genie is validating the live data schema and continuous backup policy...",
   "deploy-backend-service": "Genie is working with the Orchestrator to deploy your backend service...",
   "sync-frontend-integration": "Genie is wiring your frontend to the newly deployed backend...",
   "deploy-frontend-app": "Genie is publishing your frontend application...",
   "generate-test-suite": "Genie is deriving live acceptance tests from every approved requirement...",
   "execute-test-suite": "Genie is exercising the real deployed prototype before launch...",
   "run-security-scan": "Genie is scanning your backend and frontend for security issues...",
+  "security-copilot-scan": "Genie is validating Microsoft security evidence...",
+  "finops-cost-report": "Genie is collecting live Azure cost evidence...",
   "launch-mission": "Genie is minting your customer-facing launch link...",
 };
 const STARTING_LABEL =
@@ -71,14 +80,19 @@ const STARTING_LABEL =
 // Triage's `PHASE_ICONS`. Never affects step identity/ordering, which is
 // still driven entirely by `DEPLOYMENT_STEP_ORDER`/`DEPLOYMENT_STEP_NAMES`.
 const STEP_ICONS: Record<DeploymentStepId, string> = {
+  "validate-deployment-contract": "📜",
   "generate-access-policy": "🔐",
   "provision-foundry-agents": "🤖",
+  "provision-data-layer": "🗄️",
+  "validate-data-schema": "🔎",
   "deploy-backend-service": "⚙️",
   "sync-frontend-integration": "🔗",
   "deploy-frontend-app": "🌐",
   "generate-test-suite": "🧪",
   "execute-test-suite": "✅",
   "run-security-scan": "🛡️",
+  "security-copilot-scan": "🔒",
+  "finops-cost-report": "💰",
   "launch-mission": "🚀",
 };
 
@@ -332,18 +346,14 @@ function StepRow({
 /**
  * The real Deploy & Launch pipeline: nine named, code-driven steps
  * (`DEPLOYMENT_STEP_ORDER`) executed by the backend's
- * `DeploymentPipelineService` against real Azure SDKs (or their Null/local
- * equivalents in local provider mode) - never simulated. Starts
- * automatically as soon as this page loads with no run yet for this
- * mission - the user's review already happened on Workshop (the checkbox +
- * "Proceed to Deploy & Launch" action), so no separate manual click or
- * approval screen is needed here. This stage has exactly one gate - the
- * human already having clicked through to get here - so `start()` runs the
- * pipeline immediately. The backend also self-heals any not-yet-finished
+ * `DeploymentPipelineService` against real Azure SDKs. A named governance
+ * approval is required before a new non-production release. The backend
+ * also self-heals any not-yet-finished
  * upstream workflow step (e.g. build-solution/test-generation) by resuming
  * the same run before running the pipeline.
  */
 export function DeployLaunchPage(): JSX.Element {
+  const navigate = useNavigate();
   const { sessionId, workflowRunId } = useSessionContext();
 
   const runsFetcher = useCallback(
@@ -371,6 +381,8 @@ export function DeployLaunchPage(): JSX.Element {
 
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [releaseApproval, setReleaseApproval] = useState<ApprovalRequest | null>(null);
+  const [approvalWorking, setApprovalWorking] = useState(false);
 
   // A client-side network hiccup on the start() call (e.g. a slow/lost
   // response) does not mean the pipeline itself failed to kick off - the
@@ -400,29 +412,60 @@ export function DeployLaunchPage(): JSX.Element {
     }
     
     try {
-      await deployLaunchApi.start(sessionId, workflowRunId, traceId, resumeFromStep);
+      await deployLaunchApi.start(
+        sessionId,
+        workflowRunId,
+        traceId,
+        resumeFromStep,
+        resumeFromStep ? undefined : releaseApproval?.id,
+      );
       refresh();
     } catch (err) {
       setStartError((err as ApiError).message ?? "Failed to start Deploy & Launch.");
     } finally {
       setStarting(false);
     }
-  }, [sessionId, workflowRunId, activeRun, refresh]);
+  }, [sessionId, workflowRunId, activeRun, refresh, releaseApproval]);
 
-  // Starts Deploy & Launch automatically the first time this page has no
-  // run yet for the current mission - the user's review already happened
-  // on Workshop, so no separate manual "Start Deploy & Launch" click is
-  // needed for the normal flow. Fires once per mount/run-set; the button
-  // below still exists to manually retry a genuine failure.
-  const autoStartedRef = useRef(false);
-  useEffect(() => {
+  const requestReleaseApproval = useCallback(async () => {
     if (!sessionId || !workflowRunId) return;
-    if (!runs) return;
-    if (activeRun) return;
-    if (autoStartedRef.current) return;
-    autoStartedRef.current = true;
-    void handleStart();
-  }, [sessionId, workflowRunId, runs, activeRun, handleStart]);
+    setApprovalWorking(true);
+    setStartError(null);
+    try {
+      setReleaseApproval(
+        await deployLaunchApi.requestApproval(
+          sessionId,
+          workflowRunId,
+          getTraceId(workflowRunId) ?? undefined,
+        ),
+      );
+    } catch (err) {
+      setStartError((err as ApiError).message ?? "Unable to request release approval.");
+    } finally {
+      setApprovalWorking(false);
+    }
+  }, [sessionId, workflowRunId]);
+
+  const decideReleaseApproval = useCallback(
+    async (decision: "approved" | "rejected") => {
+      if (!sessionId || !releaseApproval) return;
+      setApprovalWorking(true);
+      try {
+        await approvalApi.decide(
+          sessionId,
+          releaseApproval.id,
+          decision,
+          "Human non-production release decision.",
+        );
+        setReleaseApproval({ ...releaseApproval, status: decision });
+      } catch (err) {
+        setStartError((err as ApiError).message ?? "Unable to record release decision.");
+      } finally {
+        setApprovalWorking(false);
+      }
+    },
+    [releaseApproval, sessionId],
+  );
 
   // The full step roster, shown to the user immediately - even before a run
   // has actually started - so they see the whole plan up front ("Not
@@ -533,7 +576,7 @@ export function DeployLaunchPage(): JSX.Element {
   const activityLabel = awaitingUpstreamStep
     ? "Genie is finishing an earlier mission step before Deploy & Launch's own steps can begin..."
     : !activeRun
-      ? // No run record exists yet (still auto-starting) - naming step 1's
+      ? // No run record exists yet - naming step 1's
         // specific work here would claim progress that has not begun.
         STARTING_LABEL
       : runningStep
@@ -593,12 +636,10 @@ export function DeployLaunchPage(): JSX.Element {
 
   if (!sessionId || !workflowRunId) {
     return (
-      <div>
-        <PageHeader title="Deploy & Launch" subtitle="No active mission yet." />
-        <Text size={300} style={{ opacity: 0.7 }}>
-          Complete the UI & Agent Design workshop from an active mission run before deploying.
-        </Text>
-      </div>
+      <NoActiveMissionState
+        title="Deploy & Launch"
+        message="Complete the UI & Agent Design workshop from an active mission run before deploying."
+      />
     );
   }
 
@@ -612,15 +653,8 @@ export function DeployLaunchPage(): JSX.Element {
       {error ? <ErrorState error={error} onRetry={refresh} /> : null}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* No manual click/confirmation is shown for the normal path - the
-            auto-start effect above already kicks this off the instant the
-            page loads with no run yet. A visible "Start Deploy & Launch"
-            button only appears when something genuinely needs the user's
-            action: a real start failure (startError) or a run that already
-            failed - never as a routine second confirmation after Workshop's
-            review. */}
-        {startError || activeRun?.status === "failed" ? (
-          <SectionCard title={activeRun?.status === "failed" ? "Deploy & Launch Failed" : "Start Deploy & Launch"}>
+        {!activeRun ? (
+          <SectionCard title="Non-production release approval">
             {startError ? (
               <MessageBar intent="warning" layout="multiline" style={{ marginBottom: 12 }}>
                 <MessageBarBody>
@@ -630,10 +664,46 @@ export function DeployLaunchPage(): JSX.Element {
               </MessageBar>
             ) : null}
             <div style={{ display: "flex", gap: 8 }}>
-              <Button appearance="primary" disabled={starting} onClick={() => void handleStart()}>
-                {starting ? "Starting..." : "Retry Deploy & Launch"}
-              </Button>
+              {!releaseApproval ? (
+                <Button
+                  appearance="primary"
+                  disabled={approvalWorking}
+                  onClick={() => void requestReleaseApproval()}
+                >
+                  Request release approval
+                </Button>
+              ) : null}
+              {releaseApproval?.status === "pending" ? (
+                <>
+                  <Button
+                    appearance="primary"
+                    disabled={approvalWorking}
+                    onClick={() => void decideReleaseApproval("approved")}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    disabled={approvalWorking}
+                    onClick={() => void decideReleaseApproval("rejected")}
+                  >
+                    Reject
+                  </Button>
+                </>
+              ) : null}
+              {releaseApproval?.status === "approved" ? (
+                <Button appearance="primary" disabled={starting} onClick={() => void handleStart()}>
+                  {starting ? "Starting..." : "Start approved deployment"}
+                </Button>
+              ) : null}
             </div>
+          </SectionCard>
+        ) : null}
+
+        {activeRun?.status === "failed" ? (
+          <SectionCard title="Deploy & Launch Failed">
+            <Button appearance="primary" disabled={starting} onClick={() => void handleStart()}>
+              {starting ? "Starting..." : "Retry Deploy & Launch"}
+            </Button>
           </SectionCard>
         ) : null}
 
@@ -664,6 +734,14 @@ export function DeployLaunchPage(): JSX.Element {
             <Text size={200} style={{ opacity: 0.7 }}>
               See the Requirement Validation tab for full per-requirement evidence.
             </Text>
+          </SectionCard>
+        ) : null}
+
+        {activeRun?.status === "completed" ? (
+          <SectionCard title="Production promotion">
+            <Button appearance="primary" onClick={() => navigate("/production-promotion")}>
+              Rehearse and promote to production
+            </Button>
           </SectionCard>
         ) : null}
 

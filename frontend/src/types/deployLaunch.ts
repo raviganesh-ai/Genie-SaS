@@ -1,37 +1,51 @@
 /** Mirrors backend/app/deploy_launch/models.py 1:1. */
 
 export type DeploymentStepId =
+  | "validate-deployment-contract"
   | "generate-access-policy"
   | "provision-foundry-agents"
+  | "provision-data-layer"
+  | "validate-data-schema"
   | "deploy-backend-service"
   | "sync-frontend-integration"
   | "deploy-frontend-app"
   | "generate-test-suite"
   | "execute-test-suite"
   | "run-security-scan"
+  | "security-copilot-scan"
+  | "finops-cost-report"
   | "launch-mission";
 
 /** Ordered pipeline - mirrors `DEPLOYMENT_STEP_ORDER`/`DEPLOYMENT_STEP_NAMES`. */
 export const DEPLOYMENT_STEP_ORDER: DeploymentStepId[] = [
+  "validate-deployment-contract",
   "generate-access-policy",
   "provision-foundry-agents",
+  "provision-data-layer",
+  "validate-data-schema",
   "deploy-backend-service",
   "sync-frontend-integration",
   "deploy-frontend-app",
   "generate-test-suite",
   "execute-test-suite",
+  "run-security-scan",
   "launch-mission",
 ];
 
 export const DEPLOYMENT_STEP_NAMES: Record<DeploymentStepId, string> = {
+  "validate-deployment-contract": "Validate Deployment Contract",
   "generate-access-policy": "Generate Access Policy & Least Access",
   "provision-foundry-agents": "Deploy Agents to Foundry",
+  "provision-data-layer": "Provision Data Layer",
+  "validate-data-schema": "Apply & Validate Data Schema",
   "deploy-backend-service": "Deploy Backend Service",
   "sync-frontend-integration": "Update Frontend Integrations",
   "deploy-frontend-app": "Deploy Frontend",
   "generate-test-suite": "Generate Requirement Acceptance Tests",
   "execute-test-suite": "Requirement Validation",
   "run-security-scan": "Security Scan (Backend & Frontend)",
+  "security-copilot-scan": "Microsoft Defender & Security Copilot Scan",
+  "finops-cost-report": "Azure FinOps Cost Report",
   "launch-mission": "Launch",
 };
 

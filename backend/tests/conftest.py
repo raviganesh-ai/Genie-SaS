@@ -166,6 +166,7 @@ def foundry_configured_settings(valid_config_root: Path) -> Settings:
         ),
         deployment_storage_account_name="genieexamplestorage",
         deployment_location="eastus2",
+        production_resource_group="genie-production-example-rg",
         prototype_api_gateway_enabled=True,
         prototype_api_gateway_publisher_email="genie@example.com",
         prototype_api_gateway_publisher_name="Genie",

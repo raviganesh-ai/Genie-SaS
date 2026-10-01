@@ -476,7 +476,7 @@ export function RequirementDiscoveryPage(): JSX.Element {
             backgroundColor: "rgba(19, 25, 33, 0.55)",
           }}
         >
-          Start a workflow run from Upload to begin discovering requirements.
+          Start a mission from Home to begin discovering requirements.
         </Text>
       </div>
     );

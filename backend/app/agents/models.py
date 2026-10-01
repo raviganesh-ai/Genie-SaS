@@ -82,9 +82,8 @@ class AgentDefinition(BaseModel):
             "raw 'asst_...' id). This agent's reasoning, instructions, and "
             "tools are owned and versioned in Azure AI Foundry, never in "
             "Genie source code. Required for any agent executed via "
-            "AzureAgentGateway in production; omitted only for agents that "
-            "are exclusively exercised through LocalAgentGateway during "
-            "local development."
+            "AzureAgentGateway. Every enabled Genie agent must provide this "
+            "reference because no local execution path exists."
         ),
     )
     foundry_agent_version: str | None = Field(

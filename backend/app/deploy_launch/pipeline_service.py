@@ -66,6 +66,10 @@ from app.deploy_launch.container_app_frontend_deployment_service import (
     ContainerAppFrontendDeploymentService,
     NullContainerAppFrontendDeploymentService,
 )
+from app.deploy_launch.data_layer_provisioning_service import (
+    DataLayerProvisioner,
+    DataLayerProvisioningResult,
+)
 from app.deploy_launch.mission_agent_provisioning_service import (
     MissionAgentProvisioningService,
     NullMissionAgentProvisioningService,
@@ -1259,6 +1263,7 @@ class DeploymentPipelineService:
         frontend_deployment_service: (
             ContainerAppFrontendDeploymentService | NullContainerAppFrontendDeploymentService
         ),
+        data_layer_provisioning_service: DataLayerProvisioner,
         test_execution_service: TestExecutionService,
         security_scan_service: SecurityScanService,
         build_workspace_root: Path,
@@ -1281,6 +1286,7 @@ class DeploymentPipelineService:
         self._mission_agent_provisioning_service = mission_agent_provisioning_service
         self._backend_deployment_service = backend_deployment_service
         self._frontend_deployment_service = frontend_deployment_service
+        self._data_layer_provisioning_service = data_layer_provisioning_service
         self._test_execution_service = test_execution_service
         self._security_scan_service = security_scan_service
         self._run_repository = run_repository or InMemoryDeploymentRunRepository()
@@ -1338,13 +1344,13 @@ class DeploymentPipelineService:
         session_id: str,
         requesting_user_id: str,
         workflow_run_id: str,
+        approval_request_id: str | None = None,
         trace_id: str | None = None,
         resume_from_step: str | None = None,
         requesting_tenant_id: str = "",
         requesting_object_id: str = "",
     ) -> DeploymentPipelineRun:
-        """Kicks off every Deploy & Launch step in order as soon as the human
-        clicks Start - there is no separate approval checkpoint to decide.
+        """Kicks off every Deploy & Launch step after the non-production approval.
 
         If ``resume_from_step`` is provided, the pipeline resumes from that step
         instead of starting from the first step, allowing retry/recovery from a
@@ -1368,6 +1374,23 @@ class DeploymentPipelineService:
         resolved_trace_id = trace_id or str(uuid4())
 
         if not resume_from_step:
+            if not approval_request_id:
+                raise DeploymentPipelineStepFailedError(
+                    "An approved non-production release request is required."
+                )
+            approval = await self._orchestrator.approval_service.get_request(
+                approval_request_id
+            )
+            if (
+                approval is None
+                or approval.status != "approved"
+                or approval.session_id != session_id
+                or approval.subject_type != "nonproduction_release"
+                or approval.subject_id != workflow_run_id
+            ):
+                raise DeploymentPipelineStepFailedError(
+                    "Non-production release requires an approved governance decision."
+                )
             active_count = sum(
                 1
                 for run in self._runs.values()
@@ -2104,7 +2127,21 @@ class DeploymentPipelineService:
             await self._persist_run(pipeline_run)
 
             try:
-                if step_id == "generate-access-policy":
+                if step_id == "validate-deployment-contract":
+                    if not mission_slug or not mission_title:
+                        raise DeploymentPipelineStepFailedError(
+                            "Deployment contract requires mission identity and title."
+                        )
+                    if not pipeline_run.resource_group_name:
+                        raise DeploymentPipelineStepFailedError(
+                            "Deployment contract requires an isolated resource group."
+                        )
+                    detail = (
+                        "Validated mission, resource-group, Foundry-agent, backend, data-layer, "
+                        "frontend, test, and launch stage contract."
+                    )
+
+                elif step_id == "generate-access-policy":
                     document = await self._access_policy_service.generate(
                         mission_id=mission_slug,
                         resource_group_name=pipeline_run.resource_group_name,
@@ -2207,6 +2244,64 @@ class DeploymentPipelineService:
                     }
                     detail = f"Provisioned {len(provisioned)} Foundry agent(s) for this mission."
 
+                elif step_id == "provision-data-layer":
+                    identity = (
+                        pipeline_run.access_policy.mission_identity
+                        if pipeline_run.access_policy
+                        else None
+                    )
+                    if identity is None or not pipeline_run.resource_group_name:
+                        raise DeploymentPipelineStepFailedError(
+                            "Data provisioning requires the mission managed identity "
+                            "and isolated resource group."
+                        )
+                    data_result = await self._data_layer_provisioning_service.provision(
+                        mission_slug=mission_slug,
+                        resource_group_name=pipeline_run.resource_group_name,
+                        identity_principal_id=identity.identity_principal_id,
+                    )
+                    pipeline_run.data_account_name = data_result.account_name
+                    pipeline_run.data_endpoint = data_result.endpoint
+                    pipeline_run.data_database_name = data_result.database_name
+                    pipeline_run.data_container_name = data_result.container_name
+                    pipeline_run.data_container_resource_id = data_result.container_resource_id
+                    pipeline_run.data_schema_version = data_result.schema_version
+                    detail = (
+                        f"Provisioned Cosmos DB account '{data_result.account_name}' with "
+                        "managed-identity data access and local authentication disabled."
+                    )
+
+                elif step_id == "validate-data-schema":
+                    if not all(
+                        (
+                            pipeline_run.data_account_name,
+                            pipeline_run.data_endpoint,
+                            pipeline_run.data_database_name,
+                            pipeline_run.data_container_name,
+                            pipeline_run.data_container_resource_id,
+                            pipeline_run.data_schema_version,
+                        )
+                    ):
+                        raise DeploymentPipelineStepFailedError(
+                            "Data schema validation requires completed data provisioning."
+                        )
+                    data_result = DataLayerProvisioningResult(
+                        account_name=pipeline_run.data_account_name or "",
+                        endpoint=pipeline_run.data_endpoint or "",
+                        database_name=pipeline_run.data_database_name or "",
+                        container_name=pipeline_run.data_container_name or "",
+                        container_resource_id=pipeline_run.data_container_resource_id or "",
+                        schema_version=pipeline_run.data_schema_version or "",
+                    )
+                    await self._data_layer_provisioning_service.validate_schema(
+                        result=data_result
+                    )
+                    detail = (
+                        f"Validated live data schema {data_result.schema_version}, "
+                        f"database '{data_result.database_name}', container "
+                        f"'{data_result.container_name}', and /partitionKey contract."
+                    )
+
                 elif step_id == "deploy-backend-service":
                     materialized = self._materialized_builds[pipeline_run.id]
                     scaffold = generate_backend_service_scaffold(
@@ -2231,6 +2326,9 @@ class DeploymentPipelineService:
                         mission_slug=mission_slug,
                         build_root=backend_root,
                         mission_identity_resource_id=mission_identity_resource_id,
+                        data_endpoint=pipeline_run.data_endpoint,
+                        data_database_name=pipeline_run.data_database_name,
+                        data_container_name=pipeline_run.data_container_name,
                         on_progress=_on_backend_progress,
                     )
                     pipeline_run.backend_url = backend_result.backend_url
@@ -2781,6 +2879,7 @@ def create_deployment_pipeline_service(
     frontend_deployment_service: (
         ContainerAppFrontendDeploymentService | NullContainerAppFrontendDeploymentService
     ),
+    data_layer_provisioning_service: DataLayerProvisioner,
     run_repository: DeploymentRunRepository | None = None,
 ) -> DeploymentPipelineService:
     """Wires a ``DeploymentPipelineService`` from already-constructed collaborators.
@@ -2800,6 +2899,7 @@ def create_deployment_pipeline_service(
         mission_agent_provisioning_service=mission_agent_provisioning_service,
         backend_deployment_service=backend_deployment_service,
         frontend_deployment_service=frontend_deployment_service,
+        data_layer_provisioning_service=data_layer_provisioning_service,
         run_repository=run_repository,
         prototype_default_ttl_days=settings.prototype_default_ttl_days,
         prototype_max_active_per_owner=settings.prototype_max_active_per_owner,

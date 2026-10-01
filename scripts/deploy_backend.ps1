@@ -32,6 +32,12 @@ param(
     [string]$MemoryStoreEndpoint,
 
     [Parameter(Mandatory = $true)]
+    [string]$GitHubMcpEndpoint,
+
+    [Parameter(Mandatory = $true)]
+    [string]$GitHubMcpTokenSecretName,
+
+    [Parameter(Mandatory = $true)]
     [string]$PrototypeApiGatewayPublisherEmail,
 
     [Parameter(Mandatory = $true)]
@@ -83,11 +89,26 @@ function Set-ContainerEnvironmentVariable {
     )
 }
 
+function Set-ContainerSecretEnvironmentVariable {
+    param(
+        [Parameter(Mandatory = $true)]$Container,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$SecretRef
+    )
+
+    Remove-ContainerEnvironmentVariable -Container $Container -Name $Name
+    $Container.env = @($Container.env) + @(
+        [pscustomobject]@{ name = $Name; secretRef = $SecretRef }
+    )
+}
+
 foreach ($requiredValue in @{
     BackendImage = $BackendImage
     AllowedOrigin = $AllowedOrigin
     GatewayUrl = $GatewayUrl
     MemoryStoreEndpoint = $MemoryStoreEndpoint
+    GitHubMcpEndpoint = $GitHubMcpEndpoint
+    GitHubMcpTokenSecretName = $GitHubMcpTokenSecretName
     PrototypeApiGatewayPublisherEmail = $PrototypeApiGatewayPublisherEmail
     PrototypeApiGatewayPublisherName = $PrototypeApiGatewayPublisherName
 }.GetEnumerator()) {
@@ -97,6 +118,9 @@ foreach ($requiredValue in @{
 }
 if (-not $GatewayUrl.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "GatewayUrl must use HTTPS."
+}
+if (-not $GitHubMcpEndpoint.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "GitHubMcpEndpoint must use HTTPS."
 }
 
 $app = Invoke-AzJson containerapp show `
@@ -111,12 +135,16 @@ if ($backend.Count -ne 1) {
     throw "Expected exactly one '$BackendContainerName' container; found $($backend.Count)."
 }
 $backend = $backend[0]
+$backend.PSObject.Properties.Remove("imageType")
 $backend.image = $BackendImage
 foreach ($retiredName in @(
     "GENIE_MISE_ENDPOINT",
+    "GENIE_ENTRA_ENABLED",
     "GENIE_ENTRA_AUTHORITY",
     "GENIE_ENTRA_TENANT_ID",
     "GENIE_ENTRA_CLIENT_ID",
+    "GENIE_ENTRA_AUDIENCE",
+    "GENIE_ENTRA_REQUIRED_SCOPE",
     "GENIE_PROTOTYPE_MISE_ENABLED",
     "GENIE_PROTOTYPE_MISE_GATEWAY_IMAGE",
     "GENIE_PROTOTYPE_MISE_TEST_PRINCIPAL_CLIENT_ID",
@@ -133,6 +161,10 @@ foreach ($retiredName in @(
     Remove-ContainerEnvironmentVariable -Container $backend -Name $retiredName
 }
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_CORS_ALLOWED_ORIGINS" -Value $AllowedOrigin
+Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_GITHUB_MCP_ENABLED" -Value "true"
+Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_GITHUB_MCP_ENDPOINT" -Value $GitHubMcpEndpoint
+Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_GITHUB_MCP_TOKEN_ENV_VAR" -Value "GITHUB_MCP_TOKEN"
+Set-ContainerSecretEnvironmentVariable -Container $backend -Name "GITHUB_MCP_TOKEN" -SecretRef $GitHubMcpTokenSecretName
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_PROTOTYPE_API_GATEWAY_ENABLED" -Value "true"
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL" -Value $PrototypeApiGatewayPublisherEmail
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME" -Value $PrototypeApiGatewayPublisherName
@@ -140,6 +172,8 @@ Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_MEMORY_STORE_B
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_MEMORY_STORE_ENDPOINT" -Value $MemoryStoreEndpoint
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_MEMORY_STORE_DATABASE_NAME" -Value "genie"
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_MEMORY_STORE_CONTAINER_NAME" -Value "memory"
+Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_LINEAGE_STORE_BACKEND" -Value "cosmos_db"
+Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_LINEAGE_STORE_ENDPOINT" -Value $MemoryStoreEndpoint
 Set-ContainerEnvironmentVariable -Container $backend -Name "GENIE_PROTOTYPE_MAX_ACTIVE_PER_OWNER" -Value $PrototypeMaxActivePerOwner.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 $probes = @(
     [pscustomobject]@{

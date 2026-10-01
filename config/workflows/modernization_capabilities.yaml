@@ -1,0 +1,86 @@
+version: "1.0"
+workflows: []
+capabilities:
+  - id: runtime_upgrade
+    name: Language or runtime upgrade
+    description: Upgrade a repository to a supported language or runtime version.
+    target_label: Target language or runtime version
+    instruction_template: >-
+      Upgrade the repository to {target}. Limit changes to compatibility,
+      dependencies, configuration, tests, and documentation required by that upgrade.
+  - id: framework_upgrade
+    name: Framework upgrade
+    description: Upgrade an existing application framework without changing its business scope.
+    target_label: Target framework and version
+    instruction_template: >-
+      Upgrade the existing application framework to {target}. Preserve behavior and limit
+      changes to required framework APIs, configuration, dependencies, tests, and documentation.
+  - id: dependency_upgrade
+    name: Dependency upgrade or replacement
+    description: Upgrade or replace a specific dependency already evidenced in the repository.
+    target_label: Dependency and approved target version or replacement
+    instruction_template: >-
+      Upgrade or replace the evidenced dependency with {target}. Change only directly affected
+      integrations, configuration, tests, lock files, and documentation.
+  - id: standards_remediation
+    name: Standards conformance remediation
+    description: Remediate findings from the selected commit-pinned standards assessment.
+    target_label:
+    instruction_template: >-
+      Remediate only the non-conformant findings in the selected standards assessment.
+      Do not introduce unrelated architecture or product changes.
+  - id: strategy_recommendation
+    name: Modernization strategy recommendation
+    description: >-
+      Evaluate retain, retire, replace, rehost, relocate, replatform, and refactor
+      options per workload component and recommend Azure target services, without
+      changing any existing code.
+    target_label:
+    instruction_template: >-
+      Evaluate retain, retire, replace, rehost, relocate, replatform, and refactor
+      options for each workload component evidenced in the repository assessment.
+      For each component, recommend the preferable option with rationale explaining
+      why it is preferable to lower-cost or lower-risk alternatives, and recommend
+      Azure target services drawn only from documented, currently supported Azure
+      capabilities (for example App Service, Container Apps, AKS, Functions, API
+      Management, Service Bus, Event Grid, Azure SQL, Cosmos DB, Storage, Redis,
+      Key Vault, Azure Monitor, and Application Insights) justified by the evidenced
+      workload needs and standards. Produce this as a single new
+      MODERNIZATION_STRATEGY.md file; do not modify any existing source file.
+  - id: rehost_lift_and_shift
+    name: Rehost to Azure (lift-and-shift)
+    description: >-
+      Move the workload to the specified Azure hosting service with minimal code
+      change, preserving its current architecture.
+    target_label: Target Azure hosting service
+    instruction_template: >-
+      Rehost this workload to {target} with the minimum change necessary to run
+      unmodified on that service - containerization, startup, health-check,
+      configuration, and deployment-asset changes only. Preserve the existing
+      architecture and behavior; do not restructure modules or services.
+  - id: replatform
+    name: Replatform (swap runtime or hosting foundation)
+    description: >-
+      Swap an underlying runtime, hosting platform, or data platform for the
+      specified target while preserving the application's architecture.
+    target_label: Target platform or managed service
+    instruction_template: >-
+      Replatform this workload onto {target}, changing only the runtime, hosting,
+      data-access, or configuration layers required to run on that platform.
+      Preserve the application's existing architecture, module boundaries, and
+      business behavior.
+  - id: monolith_modularization
+    name: Monolith to modular monolith
+    description: >-
+      Introduce internal module boundaries inside an existing monolith and
+      propose service extraction only where a demonstrable independent-scaling,
+      release, ownership, reliability, or security need exists.
+    target_label:
+    instruction_template: >-
+      Refactor this monolith into a modular monolith by introducing clear internal
+      module boundaries along the evidenced coupling and ownership lines in the
+      repository assessment. Propose extracting a component into an independently
+      deployed service only where there is a demonstrable independent-scaling,
+      release, ownership, reliability, or security need, using a strangler-pattern
+      approach for any such extraction. Preserve existing external behavior and
+      do not invent requirements not supported by the assessment.
