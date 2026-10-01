@@ -53,6 +53,11 @@ class SelectSolutionRequest(BaseModel):
     solution_id: str = Field(min_length=1)
 
 
+class IdeateSolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: str = Field(min_length=1, max_length=2000)
+
+
 @router.get("/discovery")
 async def list_discovery_cases(
     user: AuthenticatedUser = Depends(get_current_user),
@@ -194,6 +199,20 @@ async def refresh_discovery_solution_pricing(
 ) -> DiscoveryCase:
     return await discovery_service.refresh_solution_pricing(
         session_id=session_id, requesting_user_id=user.user_id
+    )
+
+
+@router.post("/sessions/{session_id}/discovery/solutions/ideate")
+async def ideate_discovery_solution(
+    session_id: str,
+    body: IdeateSolutionRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    discovery_service: DiscoveryService = Depends(get_discovery_service),
+) -> DiscoveryCase:
+    return await discovery_service.ideate_solution(
+        session_id=session_id,
+        requesting_user_id=user.user_id,
+        message=body.message,
     )
 
 

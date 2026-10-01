@@ -488,6 +488,136 @@ async def test_refresh_solution_pricing_preserves_generated_solution() -> None:
     assert refreshed.proposed_solutions[0].cost_estimate.monthly_amount == 42.5
 
 
+def _ideated_solution_payload(solution_id: str = "serverless-cost-optimized") -> dict[str, object]:
+    return {
+        "solutions": [
+            {
+                "id": solution_id,
+                "name": "Serverless cost-optimized workflow",
+                "summary": "A consumption-billed alternative favoring minimal idle spend.",
+                "requirements_text": "[REQ-001] " + ("Review uploaded claims. " * 200),
+                "architecture_text": "## Single-Page UI Design\n" + ("Evidence zone. " * 320),
+                "architecture_nodes": [
+                    {
+                        "id": "functions",
+                        "service_name": "Azure Functions",
+                        "azure_icon_key": "azure functions",
+                        "purpose": "Runs the claims review workflow on demand",
+                        "x": 0,
+                        "y": 0,
+                    }
+                ],
+                "architecture_edges": [],
+                "pros": ["Lower idle cost"],
+                "cons": ["Cold-start latency"],
+                "ai_feasibility": "feasible_with_tradeoffs",
+                "ai_feasibility_rationale": "Consumption billing suits intermittent volume.",
+                "evidence_references": ["call.txt: manual document review"],
+                "pricing_queries": [
+                    {
+                        "service_name": "Azure Functions",
+                        "arm_region_name": "eastus",
+                        "sku_name": "Consumption",
+                        "units_per_month": 1,
+                        "assumption": "One unit per month",
+                    }
+                ],
+            }
+        ]
+    }
+
+
+async def _generate_baseline_solutions(service: DiscoveryService, session_id: str) -> None:
+    await service.analyze_personas(session_id=session_id, requesting_user_id="user-1")
+    await service.select_persona(
+        session_id=session_id, requesting_user_id="user-1", persona_id="jordan-lee"
+    )
+    await service.set_qa_mode(session_id=session_id, requesting_user_id="user-1", mode="batch")
+    await service.answer_question(
+        session_id=session_id,
+        requesting_user_id="user-1",
+        question_id="monthly-volume",
+        answer="10,000 to 100,000 documents",
+    )
+    await service.generate_solutions(session_id=session_id, requesting_user_id="user-1")
+
+
+async def test_ideate_solution_appends_without_overwriting_existing_solutions() -> None:
+    service, orchestrator, session_id = await _create_service()
+    await _generate_baseline_solutions(service, session_id)
+    baseline = await service.get_case(session_id=session_id, requesting_user_id="user-1")
+    assert len(baseline.proposed_solutions) == 1
+    orchestrator.outputs.append(json.dumps(_ideated_solution_payload()))
+
+    updated = await service.ideate_solution(
+        session_id=session_id,
+        requesting_user_id="user-1",
+        message="What if we minimized idle cost with a serverless approach instead?",
+    )
+
+    assert len(updated.proposed_solutions) == 2
+    assert updated.proposed_solutions[0].id == baseline.proposed_solutions[0].id
+    assert updated.proposed_solutions[1].id == "serverless-cost-optimized"
+    assert updated.proposed_solutions[1].name == "Serverless cost-optimized workflow"
+    assert updated.proposed_solutions[1].cost_estimate.monthly_amount == 42.5
+    # The prior solution and the user's current selection (if any) are untouched.
+    assert updated.status == baseline.status
+    assert orchestrator.calls[-1] == "discovery-ideate-solution-v1"
+    ideate_variables = orchestrator.execution_requests[-1]["variables"]
+    assert isinstance(ideate_variables, dict)
+    assert "serverless approach" in str(ideate_variables["user_request"])
+    assert baseline.proposed_solutions[0].id in str(ideate_variables["existing_solutions"])
+
+
+async def test_ideate_solution_renames_a_colliding_id_instead_of_dropping_it() -> None:
+    service, orchestrator, session_id = await _create_service()
+    await _generate_baseline_solutions(service, session_id)
+    baseline = await service.get_case(session_id=session_id, requesting_user_id="user-1")
+    colliding_id = baseline.proposed_solutions[0].id
+    orchestrator.outputs.append(json.dumps(_ideated_solution_payload(solution_id=colliding_id)))
+
+    updated = await service.ideate_solution(
+        session_id=session_id,
+        requesting_user_id="user-1",
+        message="Explore a lower-cost alternative.",
+    )
+
+    assert len(updated.proposed_solutions) == 2
+    assert updated.proposed_solutions[0].id == colliding_id
+    assert updated.proposed_solutions[1].id != colliding_id
+    assert updated.proposed_solutions[1].id.startswith(colliding_id)
+
+
+async def test_ideate_solution_rejects_blank_message() -> None:
+    service, _, session_id = await _create_service()
+    await _generate_baseline_solutions(service, session_id)
+
+    with pytest.raises(DiscoveryStateConflictError, match="Describe what you'd like"):
+        await service.ideate_solution(
+            session_id=session_id, requesting_user_id="user-1", message="   "
+        )
+
+
+async def test_ideate_solution_requires_existing_solutions_first() -> None:
+    service, _, session_id = await _create_service()
+    await service.analyze_personas(session_id=session_id, requesting_user_id="user-1")
+    await service.select_persona(
+        session_id=session_id, requesting_user_id="user-1", persona_id="jordan-lee"
+    )
+    await service.set_qa_mode(session_id=session_id, requesting_user_id="user-1", mode="batch")
+    await service.answer_question(
+        session_id=session_id,
+        requesting_user_id="user-1",
+        question_id="monthly-volume",
+        answer="10,000 to 100,000 documents",
+    )
+
+    with pytest.raises(DiscoveryStateConflictError):
+        await service.ideate_solution(
+            session_id=session_id, requesting_user_id="user-1", message="Try something else."
+        )
+
+
 async def test_solution_generation_retries_when_pricing_is_outside_architecture() -> None:
     service, orchestrator, session_id = await _create_service()
     await service.analyze_personas(

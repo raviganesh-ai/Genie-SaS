@@ -76,6 +76,12 @@ interface PendingUpload {
   status: "queued" | "processing";
 }
 
+interface IdeationMessage {
+  id: string;
+  role: "user" | "genie";
+  text: string;
+}
+
 function AzureServiceNode({ data }: NodeProps<AzureNodeData>): JSX.Element {
   return (
     <div className="discovery-node" role="group" aria-label={`${data.service}: ${data.label}`}>
@@ -436,6 +442,34 @@ export function DiscoveryPage(): JSX.Element {
     },
     [refresh, removeUpload, sessionId],
   );
+
+  const [ideationMessages, setIdeationMessages] = useState<IdeationMessage[]>([]);
+  const [ideationDraft, setIdeationDraft] = useState("");
+  const [ideating, setIdeating] = useState(false);
+  const [ideationError, setIdeationError] = useState<SafeError | null>(null);
+
+  const handleIdeate = useCallback(async () => {
+    const message = ideationDraft.trim();
+    if (!sessionId || !message || ideating) return;
+    setIdeationMessages((current) => [...current, { id: `${Date.now()}-user`, role: "user", text: message }]);
+    setIdeationDraft("");
+    setIdeationError(null);
+    setIdeating(true);
+    try {
+      const before = discoveryCase?.proposed_solutions.length ?? 0;
+      const updated = await discoveryApi.ideateSolution(sessionId, message);
+      setDiscoveryCase(updated);
+      const added = updated.proposed_solutions[updated.proposed_solutions.length - 1];
+      const genieText = added && updated.proposed_solutions.length > before
+        ? `Added "${added.name}" as a new probable solution below - your existing solution${before === 1 ? "" : "s"} ${before === 1 ? "is" : "are"} unchanged.`
+        : "Added a new probable solution below.";
+      setIdeationMessages((current) => [...current, { id: `${Date.now()}-genie`, role: "genie", text: genieText }]);
+    } catch (caught) {
+      setIdeationError(caught instanceof ApiError ? caught : { message: "Unable to ideate an alternative solution." });
+    } finally {
+      setIdeating(false);
+    }
+  }, [discoveryCase?.proposed_solutions.length, ideating, ideationDraft, sessionId]);
 
   const startPrototype = useCallback(async () => {
     if (!sessionId) return;
@@ -920,6 +954,50 @@ export function DiscoveryPage(): JSX.Element {
                 onSelect={() => void perform("select solution", () => discoveryApi.selectSolution(sessionId, solution.id))}
               />
             ))}
+          </div>
+          <div className="discovery-ideation-panel" aria-labelledby="discovery-ideation">
+            <div>
+              <Text id="discovery-ideation" weight="semibold">Ask Genie to explore another option</Text>
+              <Text size={200} className="discovery-muted" style={{ display: "block" }}>
+                Describe a change you'd like Genie to try (for example, a lower-cost or serverless approach).
+                Genie adds a new probable solution alongside the ones above - nothing here is overwritten.
+              </Text>
+            </div>
+            {ideationMessages.length > 0 ? (
+              <ul className="discovery-ideation-log">
+                {ideationMessages.map((item) => (
+                  <li key={item.id} className={`discovery-ideation-message discovery-ideation-message-${item.role}`}>
+                    <Text size={200} weight="semibold">{item.role === "user" ? "You" : "Genie"}</Text>
+                    <Text size={200}>{item.text}</Text>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {ideationError ? <ErrorState error={ideationError} /> : null}
+            <div className="discovery-ideation-row">
+              <Input
+                className="discovery-ideation-input"
+                placeholder="e.g. What if we minimized cost with a serverless approach?"
+                value={ideationDraft}
+                disabled={ideating}
+                onChange={(_, data) => setIdeationDraft(data.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleIdeate();
+                  }
+                }}
+              />
+              <Button
+                appearance="primary"
+                icon={<Lightbulb24Regular />}
+                disabled={ideating || !ideationDraft.trim()}
+                onClick={() => void handleIdeate()}
+              >
+                {ideating ? "Ideating..." : "Ideate alternative"}
+              </Button>
+            </div>
+            {ideating ? <Spinner size="tiny" label="Genie is exploring an alternative architecture..." /> : null}
           </div>
           {discoveryCase.status === "ready_to_prototype" ? (
             <div className="discovery-actions">

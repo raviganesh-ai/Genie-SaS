@@ -1829,3 +1829,77 @@ prompts:
       - retry_instruction
       - source_material
     version: "2.6.0"
+
+  - id: discovery-ideate-solution-v1
+    name: Discovery Ideate Additional Solution
+    description: >-
+      Produces exactly one additional, genuinely distinct Azure-native solution option in
+      response to a free-text user request, without altering or duplicating solutions the
+      user already has in front of them.
+    template: >-
+      The customer has already been shown the probable solutions listed below and is asking
+      Genie, in conversation, to explore one additional alternative. Propose exactly one new,
+      implementable Azure-native solution that directly answers the user's request while
+      remaining grounded in the Discovery context and complete source material. Use known
+      facts and user-approved recommendations; do not convert unresolved gaps, contradictions,
+      or unapproved assumptions into facts. The new option must be materially different from
+      every existing solution listed below - do not just restate or lightly rename one of
+      them - and must expose meaningful tradeoffs and trace its major decisions to evidence.
+      Return only valid JSON with a top-level solutions array containing exactly one solution.
+      Every solution must contain id, name, summary, requirements_text, architecture_text,
+      architecture_nodes, architecture_edges, pros, cons, ai_feasibility,
+      ai_feasibility_rationale, evidence_references, and pricing_queries. id must be a new,
+      unique kebab-case identifier distinct from every existing solution id listed below.
+      evidence_references must identify the customer evidence or approved recommendation
+      supporting the option's requirements and architecture decisions. ai_feasibility must be
+      recommended, feasible_with_tradeoffs, or not_feasible. Each architecture node must
+      contain id, service_name, azure_icon_key, purpose, x, and y. Each edge must contain id,
+      source, target, and label. Use only real Azure service names; the UI maps those names to
+      an allowlisted official icon. requirements_text must use [REQ-001] style identifiers and
+      include every approved capability under the normal requirement-category headings plus a
+      Critical path section. architecture_text must follow the existing Architecture Designer
+      contract exactly: a "## Single-Page UI Design" section with one top-level
+      "**Zone name**:" bullet per concrete input zone and a "## Multi-Agent Workflow" section
+      with one top-level "**Agent name**:" bullet per agent, including exactly one Orchestrator
+      Agent. Every bullet must cite the requirement ids it fulfills. This text is sent
+      unchanged to the existing Build Agent, so do not replace it with an Azure infrastructure
+      summary. pricing_queries may contain only service_name, retail_service_name,
+      product_name, arm_region_name, sku_name, meter_name, unit_of_measure, units_per_month,
+      and assumption. Never provide prices: Genie resolves every unit price deterministically
+      from the Azure Retail Prices API and reports missing coverage. service_name must remain
+      the exact architecture-node service name. Use Azure Retail Prices API taxonomy for the
+      optional retail_service_name, product_name, sku_name, meter_name, and unit_of_measure
+      fields; include those fields whenever known so the intended billable meter is
+      unambiguous. units_per_month must be the number of billing units represented by
+      unit_of_measure, not the raw request, token, byte, or operation count. Derive
+      pricing_queries from architecture_nodes: include one query for every independently
+      billed Azure service in the architecture, use the architecture node's exact
+      service_name, and do not include services that are absent from the architecture. If a
+      logical platform label is not independently billed, represent its underlying billable
+      Azure resource as its own architecture node and price that node instead. Keep the
+      complete JSON response under 20,000 characters. Keep the summary under 2,000 characters,
+      target 1,200 to 2,500 characters each for requirements_text and architecture_text and
+      never exceed 12,000 characters for either field. Return at most 10 architecture nodes,
+      12 edges, 5 pros, 5 cons, 8 evidence references, and 10 pricing queries. Prefer concise,
+      complete content over repetition.
+
+      {retry_instruction}
+
+      User's ideation request:
+      {user_request}
+
+      Existing probable solutions already shown to the user (do not duplicate these):
+      {existing_solutions}
+
+      Discovery context:
+      {discovery_context}
+
+      Source material:
+      {source_material}
+    variables:
+      - discovery_context
+      - existing_solutions
+      - retry_instruction
+      - source_material
+      - user_request
+    version: "1.0.0"

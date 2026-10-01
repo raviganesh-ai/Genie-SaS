@@ -76,6 +76,17 @@ export const discoveryApi = {
   refreshSolutionPricing(sessionId: string): Promise<DiscoveryCase> {
     return apiFetch<DiscoveryCase>(path(sessionId, "/solutions/pricing"), { method: "POST" });
   },
+  /**
+   * Ideates one additional probable solution from a free-text chat request,
+   * without overwriting or removing any solution already shown to the user -
+   * the new option is appended alongside the existing ones.
+   */
+  ideateSolution(sessionId: string, message: string): Promise<DiscoveryCase> {
+    return apiFetch<DiscoveryCase>(path(sessionId, "/solutions/ideate"), {
+      method: "POST",
+      body: { message },
+    });
+  },
   selectSolution(sessionId: string, solutionId: string): Promise<DiscoveryCase> {
     return apiFetch<DiscoveryCase>(path(sessionId, "/solution"), {
       method: "POST",

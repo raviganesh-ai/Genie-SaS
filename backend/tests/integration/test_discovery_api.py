@@ -112,3 +112,44 @@ def test_discovery_pricing_refresh_requires_generated_solutions(app_local_settin
         assert response.json()["detail"] == (
             "Generate probable solutions before pricing them."
         )
+
+
+def test_discovery_ideate_solution_requires_existing_solutions_first(app_local_settings) -> None:
+    app = create_app(settings=app_local_settings)
+
+    with TestClient(app) as client:
+        session_id = client.post(
+            "/sessions", json={"title": "Ideate alternative"}
+        ).json()["id"]
+        client.post(
+            f"/sessions/{session_id}/discovery",
+            json={"source_upload_ids": []},
+        )
+
+        response = client.post(
+            f"/sessions/{session_id}/discovery/solutions/ideate",
+            json={"message": "What about a serverless alternative?"},
+        )
+
+        assert response.status_code == 409
+
+
+def test_discovery_ideate_solution_rejects_blank_message(app_local_settings) -> None:
+    app = create_app(settings=app_local_settings)
+
+    with TestClient(app) as client:
+        session_id = client.post(
+            "/sessions", json={"title": "Ideate alternative"}
+        ).json()["id"]
+        client.post(
+            f"/sessions/{session_id}/discovery",
+            json={"source_upload_ids": []},
+        )
+
+        response = client.post(
+            f"/sessions/{session_id}/discovery/solutions/ideate",
+            json={"message": "   "},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Describe what you'd like Genie to explore."

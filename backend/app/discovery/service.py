@@ -136,6 +136,11 @@ class _SolutionsEnvelope(BaseModel):
     solutions: list[_SolutionDraft] = Field(min_length=1, max_length=3)
 
 
+class _IdeatedSolutionEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    solutions: list[_SolutionDraft] = Field(min_length=1, max_length=1)
+
+
 class DiscoveryService:
     def __init__(
         self,
@@ -707,6 +712,92 @@ class DiscoveryService:
             estimate = await self._pricing_service.estimate(solution.pricing_queries)
             repriced_solutions.append(solution.model_copy(update={"cost_estimate": estimate}))
         return await self._save(discovery_case, proposed_solutions=repriced_solutions)
+
+    async def ideate_solution(
+        self, *, session_id: str, requesting_user_id: str, message: str
+    ) -> DiscoveryCase:
+        """Adds one new, Genie-ideated probable solution alongside the existing ones.
+
+        Unlike `generate_solutions` (which replaces the whole list from scratch), this
+        never overwrites or removes any solution already shown to the user - it appends a
+        single new option that responds to the user's free-text request, so the user can
+        keep exploring alternatives conversationally without losing what they already have.
+        """
+        if not message.strip():
+            raise DiscoveryStateConflictError("Describe what you'd like Genie to explore.")
+        discovery_case = await self.get_case(
+            session_id=session_id, requesting_user_id=requesting_user_id
+        )
+        self._require_status(
+            discovery_case, "awaiting_solution_selection", "ready_to_prototype"
+        )
+        if self._pricing_service is None:
+            raise DiscoveryStateConflictError("Azure retail pricing is unavailable.")
+        if not discovery_case.proposed_solutions:
+            raise DiscoveryStateConflictError(
+                "Generate probable solutions before ideating an alternative."
+            )
+        draft = await self._execute_ideated_solution_draft(
+            discovery_case=discovery_case,
+            source_material=await self._source_material(discovery_case, requesting_user_id),
+            message=message.strip(),
+        )
+        existing_ids = {item.id for item in discovery_case.proposed_solutions}
+        if draft.id in existing_ids:
+            draft = draft.model_copy(update={"id": f"{draft.id}-{uuid4().hex[:8]}"})
+        estimate = await self._pricing_service.estimate(draft.pricing_queries)
+        new_solution = ProposedSolution(**draft.model_dump(), cost_estimate=estimate)
+        updated_solutions = [*discovery_case.proposed_solutions, new_solution]
+        updated = await self._save(discovery_case, proposed_solutions=updated_solutions)
+        await self._write_memory(
+            updated,
+            agent_id="architecture-designer",
+            artifact=f"ideated-solution:{new_solution.id}",
+            classification="architecture_finding",
+            content={"message": message.strip(), "solution": new_solution.model_dump(mode="json")},
+        )
+        return updated
+
+    async def _execute_ideated_solution_draft(
+        self,
+        *,
+        discovery_case: DiscoveryCase,
+        source_material: str,
+        message: str,
+    ) -> _SolutionDraft:
+        existing_solutions_summary = json.dumps(
+            [
+                {"id": item.id, "name": item.name, "summary": item.summary}
+                for item in discovery_case.proposed_solutions
+            ]
+        )
+        variables = {
+            "discovery_context": self._context_json(discovery_case),
+            "existing_solutions": existing_solutions_summary,
+            "source_material": source_material,
+            "user_request": message,
+            "retry_instruction": "",
+        }
+        for attempt in range(2):
+            result = await self._execute(
+                agent_id="architecture-designer",
+                prompt_id="discovery-ideate-solution-v1",
+                variables=variables,
+                discovery_case=discovery_case,
+            )
+            try:
+                return parse_agent_response(result, _IdeatedSolutionEnvelope).solutions[0]
+            except DiscoveryAgentResponseError as exc:
+                if attempt == 1:
+                    raise
+                variables["retry_instruction"] = (
+                    "A prior response was malformed, truncated, or schema-invalid. Correct "
+                    f"these exact validation issues: {exc} Regenerate the complete response "
+                    "as fresh JSON, keep requirements_text and architecture_text between "
+                    "1,200 and 2,500 characters each, never exceed 12,000 characters, and "
+                    "close all arrays, objects, and strings."
+                )
+        raise RuntimeError("Discovery solution ideation retry loop exited unexpectedly.")
 
     async def _execute_solution_drafts(
         self,

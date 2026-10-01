@@ -259,6 +259,61 @@
   gap: 14px;
 }
 
+.discovery-ideation-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #3b5064;
+  border-radius: 8px;
+  background: #111820;
+}
+
+.discovery-ideation-log {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.discovery-ideation-message {
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #192230;
+}
+
+.discovery-ideation-message-user {
+  justify-self: end;
+  background: #1c2b3a;
+  max-width: 85%;
+}
+
+.discovery-ideation-message-genie {
+  justify-self: start;
+  background: #192230;
+  max-width: 85%;
+}
+
+.discovery-ideation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.discovery-ideation-input {
+  min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .discovery-ideation-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .discovery-two-column {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -530,6 +585,7 @@
   .discovery-question-answer,
   .discovery-section-header > button,
   .discovery-actions,
+  .discovery-ideation-panel,
   .react-flow__controls,
   .discovery-card > button {
     display: none !important;
