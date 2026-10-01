@@ -475,7 +475,7 @@ export function DiscoveryPage(): JSX.Element {
   if (!sessionId) {
     return (
       <div>
-        <PageHeader title="Prototype Solutions" subtitle="No active session yet." />
+        <PageHeader title="Discover Requirements" subtitle="No active session yet." />
         <Button appearance="primary" onClick={() => navigate("/")}>Start a session</Button>
       </div>
     );
@@ -513,10 +513,10 @@ export function DiscoveryPage(): JSX.Element {
   return (
     <div className="discovery-page genie-fade-in">
       <PageHeader
-        title="Prototype Solutions"
+        title="Discover Requirements"
         subtitle="Turn customer evidence into a persona-led, costed Azure solution and runnable prototype."
       />
-      <div className="discovery-progress" aria-label={`Prototype solutions progress, step ${progress} of 6`}>
+      <div className="discovery-progress" aria-label={`Discover Requirements progress, step ${progress} of 6`}>
         {[1, 2, 3, 4, 5, 6].map((step) => <span key={step} className={step <= progress ? "active" : ""} />)}
       </div>
       <div className="discovery-toolbar">
@@ -560,7 +560,7 @@ export function DiscoveryPage(): JSX.Element {
       {error ? <ErrorState error={error} /> : null}
       {discoveryCase?.last_error ? <MessageBar intent="warning">{discoveryCase.last_error}</MessageBar> : null}
       {uploadError ? <ErrorState error={uploadError} /> : null}
-      {busy || loadingCase ? <Spinner label={busy ? `${busy}...` : "Loading prototype solutions..."} /> : null}
+      {busy || loadingCase ? <Spinner label={busy ? `${busy}...` : "Loading Discover Requirements..."} /> : null}
 
       <section className="discovery-section" aria-labelledby="discovery-evidence">
         <div className="discovery-section-header">

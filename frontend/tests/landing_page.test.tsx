@@ -72,7 +72,7 @@ describe("LandingPage generation model selector", () => {
       </Routes>,
     );
 
-    expect(await screen.findByText("Prototype solutions revision 3")).toBeInTheDocument();
+    expect(await screen.findByText("Discover Requirements revision 3")).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Resume" }));
 
     expect(await screen.findByText("Resumed session-42 with gpt-5-mini")).toBeInTheDocument();
@@ -106,11 +106,11 @@ describe("LandingPage generation model selector", () => {
 
     renderWithProviders(<LandingPage />);
 
-    expect(await screen.findByText("Prototype solutions revision 3")).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Delete prototype solutions revision 3" }));
+    expect(await screen.findByText("Discover Requirements revision 3")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Delete Discover Requirements revision 3" }));
 
     await waitFor(() => {
-      expect(screen.queryByText("Prototype solutions revision 3")).not.toBeInTheDocument();
+      expect(screen.queryByText("Discover Requirements revision 3")).not.toBeInTheDocument();
       expect(fetchMock.mock.calls.some(([input, init]) =>
         new URL(input.toString()).pathname.endsWith("/sessions/session-42/discovery")
         && init?.method === "DELETE",

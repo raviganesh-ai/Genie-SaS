@@ -57,7 +57,9 @@ export function WorkshopPage(): JSX.Element {
   );
   const { data: run, refresh: refreshRun } = useAsyncResource(runFetcher, [sessionId, workflowRunId], {
     enabled: Boolean(sessionId && workflowRunId),
-    pollIntervalMs: Number(import.meta.env.VITE_ARCHITECTURE_STUDIO_POLL_MS ?? 0),
+    // See useArchitectureStudio.ts's DEFAULT_POLL_MS doc comment - without
+    // this, build completion is only ever seen on a full manual refresh.
+    pollIntervalMs: Number(import.meta.env.VITE_ARCHITECTURE_STUDIO_POLL_MS ?? 4000),
   });
   const { events: liveEvents, stepDeltaText } = useWorkflowEventStream(sessionId);
   const lastLiveEvent = liveEvents[liveEvents.length - 1] ?? null;

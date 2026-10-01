@@ -24,7 +24,9 @@ import { LiveWorkflowPulse } from "@/components/LiveWorkflowPulse";
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { useWorkflowEventStream } from "@/hooks/useWorkflowEventStream";
 
-const POLL_MS = Number(import.meta.env.VITE_REQUIREMENTS_POLL_MS ?? 0);
+// See hooks/useRequirements.ts's DEFAULT_POLL_MS doc comment for why this
+// must not silently default to "never refresh" in production.
+const POLL_MS = Number(import.meta.env.VITE_REQUIREMENTS_POLL_MS ?? 4000);
 
 /** Strip a leading bullet/number marker ("- ", "* ", "1. ", "2) ") off one line. */
 function stripMarker(line: string): string {

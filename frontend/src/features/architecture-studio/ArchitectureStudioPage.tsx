@@ -93,7 +93,10 @@ const GOVERNANCE_POLICY_OPTIONS: string[] = [
 
 const OTHER_POLICY_OPTION = "Other";
 
-const POLL_MS = Number(import.meta.env.VITE_ARCHITECTURE_STUDIO_POLL_MS ?? 0);
+// See useArchitectureStudio.ts's DEFAULT_POLL_MS doc comment: without this,
+// the page is stuck on stale data once the Architecture Designer agent
+// finishes mid-visit, with the Approve action never appearing.
+const POLL_MS = Number(import.meta.env.VITE_ARCHITECTURE_STUDIO_POLL_MS ?? 4000);
 
 export function ArchitectureStudioPage(): JSX.Element {
   const { sessionId, workflowRunId, missionError, setMissionError, setGovernancePolicies } =
@@ -327,7 +330,7 @@ export function ArchitectureStudioPage(): JSX.Element {
     return (
       <NoActiveMissionState
         title="UI & Agent Design"
-        message="Start a mission from Home (Discover requirements, Understand code, or Discover a solution) to see architecture recommendations here."
+        message="Start a mission from Home (Validate your Vision, Understand code, or Discover a solution) to see architecture recommendations here."
       />
     );
   }

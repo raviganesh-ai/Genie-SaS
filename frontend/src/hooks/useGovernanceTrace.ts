@@ -13,7 +13,9 @@ export interface GovernanceTraceData {
   approvals: ApprovalRequest[];
 }
 
-const DEFAULT_POLL_MS = Number(import.meta.env.VITE_GOVERNANCE_POLL_MS ?? 0);
+// See useArchitectureStudio.ts's DEFAULT_POLL_MS doc comment for why this
+// must not silently default to "never refresh" in production.
+const DEFAULT_POLL_MS = Number(import.meta.env.VITE_GOVERNANCE_POLL_MS ?? 4000);
 
 /**
  * The authoritative "Overall status" for the Governance page, derived from

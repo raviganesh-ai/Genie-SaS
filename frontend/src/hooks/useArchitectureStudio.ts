@@ -6,7 +6,15 @@ import { useAsyncResource, type AsyncResourceState } from "./useAsyncResource";
 import type { ArchitectureSnapshot } from "@/types/architecture";
 import type { SafeError } from "@/types/common";
 
-const DEFAULT_POLL_MS = Number(import.meta.env.VITE_ARCHITECTURE_STUDIO_POLL_MS ?? 0);
+// Production default: without this, the architecture snapshot is fetched
+// exactly once on page mount and never again - if the Architecture
+// Designer agent is still running at that moment (the common case, since
+// this page is reached immediately after "Proceed to Architecture"), the
+// page gets permanently stuck showing its stale "running" status and the
+// Approve action never appears, with no recourse but a full manual
+// browser refresh. 4000ms matches Deploy & Launch's own (hardcoded,
+// always-on) polling interval.
+const DEFAULT_POLL_MS = Number(import.meta.env.VITE_ARCHITECTURE_STUDIO_POLL_MS ?? 4000);
 
 export function useArchitectureStudio(
   sessionId: string | null,

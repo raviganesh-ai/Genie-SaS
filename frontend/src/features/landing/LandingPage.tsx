@@ -32,7 +32,7 @@ const CAPABILITIES: Array<{
   {
     kind: "discover_requirements",
     icon: "📝",
-    title: "Discover requirements",
+    title: "Validate your Vision",
     description:
       "Turn transcripts, recordings, documents, and conversations into traceable requirements.",
     destination: "/upload",
@@ -232,7 +232,7 @@ export function LandingPage(): JSX.Element {
         >
           {CAPABILITIES.map((capability) => (
             <button
-              key={capability.kind}
+              key={capability.title}
               type="button"
               disabled={creating}
               onClick={() => void handleCreate(capability.destination, capability.kind)}
@@ -273,7 +273,7 @@ export function LandingPage(): JSX.Element {
 
       {savedDiscoveries.length > 0 ? (
         <section style={{ marginTop: 32, textAlign: "left", borderTop: "1px solid #232a33", paddingTop: 20 }}>
-          <Text weight="semibold" size={400}>Resume Prototype Solutions</Text>
+          <Text weight="semibold" size={400}>Resume Discover Requirements</Text>
           <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
             {savedDiscoveries.map((item) => (
               <div
@@ -289,7 +289,7 @@ export function LandingPage(): JSX.Element {
               >
                 <div>
                   <Text weight="semibold" style={{ display: "block" }}>
-                    Prototype solutions revision {item.analysis_revision}
+                    Discover Requirements revision {item.analysis_revision}
                   </Text>
                   <Text size={200} style={{ opacity: 0.7 }}>
                     Updated {new Date(item.updated_at).toLocaleString()} · {item.source_upload_ids.length} source file(s)
@@ -312,8 +312,8 @@ export function LandingPage(): JSX.Element {
                     appearance="subtle"
                     shape="circular"
                     icon={<Delete24Regular />}
-                    aria-label={`Delete prototype solutions revision ${item.analysis_revision}`}
-                    title={`Delete prototype solutions revision ${item.analysis_revision}`}
+                    aria-label={`Delete Discover Requirements revision ${item.analysis_revision}`}
+                    title={`Delete Discover Requirements revision ${item.analysis_revision}`}
                     disabled={deletingSessionId !== null}
                     onClick={() => void handleDeleteDiscovery(item)}
                   />

@@ -24,7 +24,15 @@ const REQUIREMENT_CLASSIFICATIONS = new Set([
   "assumption",
 ]);
 
-const DEFAULT_POLL_MS = Number(import.meta.env.VITE_REQUIREMENTS_POLL_MS ?? 0);
+// Production default: without an explicit override, these pages must
+// still refresh themselves automatically - a long-running agent step
+// (requirements analysis, architecture design) can finish well after this
+// page's one-time initial fetch, and with no polling the only way to see
+// the real "completed" state (and the Approve action it unlocks) was a
+// full manual browser refresh. 4000ms matches Deploy & Launch's own
+// (hardcoded, always-on) polling interval. Tests that need polling off
+// pass pollIntervalMs={0} explicitly rather than relying on this default.
+const DEFAULT_POLL_MS = Number(import.meta.env.VITE_REQUIREMENTS_POLL_MS ?? 4000);
 
 /**
  * Backs the Requirement Discovery Map. Reads Shared Collaboration Memory

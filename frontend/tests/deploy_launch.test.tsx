@@ -6,6 +6,7 @@ import { FIXTURE_SESSION_ID, FIXTURE_WORKFLOW_RUN_ID } from "./fixtures";
 import { DeployLaunchPage } from "@/features/deploy-launch/DeployLaunchPage";
 import { DEPLOYMENT_STEP_NAMES, DEPLOYMENT_STEP_ORDER } from "@/types/deployLaunch";
 import type { DeploymentPipelineRun } from "@/types/deployLaunch";
+import type { ApprovalRequest } from "@/types/governance";
 
 function buildPipelineRun(overrides: Partial<DeploymentPipelineRun> = {}): DeploymentPipelineRun {
   return {
@@ -28,10 +29,31 @@ function buildPipelineRun(overrides: Partial<DeploymentPipelineRun> = {}): Deplo
   };
 }
 
+function buildApprovalRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    id: "approval-1",
+    checkpoint_id: "nonproduction-release-approval",
+    session_id: FIXTURE_SESSION_ID,
+    trace_id: FIXTURE_WORKFLOW_RUN_ID,
+    requested_by_agent_id: "release-agent",
+    subject_type: "nonproduction_release",
+    subject_id: FIXTURE_WORKFLOW_RUN_ID,
+    status: "pending",
+    requested_at: "2026-07-23T12:00:00Z",
+    expires_at: null,
+    ...overrides,
+  };
+}
+
 describe("DeployLaunchPage", () => {
-  it("starts the pipeline automatically as soon as the page loads with no run yet - no manual click needed", async () => {
+  it("never auto-starts the real Azure pipeline - requires an explicit Request -> Approve -> Start release-approval gate", async () => {
     const fetchMock = mockFetchSequence([
       { match: "/deploy-launch/", response: [] },
+      { match: "/deploy-launch/request-approval", response: buildApprovalRequest({ status: "pending" }) },
+      {
+        match: "/approvals/approval-1/decide",
+        response: { id: "decision-1", request_id: "approval-1", decision: "approved", decided_by: "user", decided_at: "2026-07-23T12:01:00Z", rationale: "Human non-production release decision." },
+      },
       { match: "/deploy-launch/start", response: buildPipelineRun({ status: "running" }) },
     ]);
 
@@ -40,19 +62,37 @@ describe("DeployLaunchPage", () => {
       workflowRunId: FIXTURE_WORKFLOW_RUN_ID,
     });
 
+    // No run exists yet and nothing was clicked - the pipeline must not
+    // have been started automatically.
+    const requestButton = await screen.findByRole("button", { name: /Request release approval/i });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/deploy-launch/start"))).toBe(false);
+
+    await userEvent.click(requestButton);
+    const approveButton = await screen.findByRole("button", { name: /^Approve$/i });
+
+    await userEvent.click(approveButton);
+    const startButton = await screen.findByRole("button", { name: /Start approved deployment/i });
+
+    // Still no start() call until the human explicitly clicks the final
+    // "Start approved deployment" button.
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/deploy-launch/start"))).toBe(false);
+
+    await userEvent.click(startButton);
+
     await waitFor(() => {
       const startCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/deploy-launch/start"));
       expect(startCall).toBeDefined();
       const [, startInit] = startCall as unknown as [string, RequestInit];
       const body = JSON.parse(startInit.body as string);
       expect(body.workflow_run_id).toBe(FIXTURE_WORKFLOW_RUN_ID);
+      expect(body.approval_request_id).toBe("approval-1");
     });
   });
 
   it("shows the full step roster up front, all Not Started, before any run exists yet", async () => {
     mockFetchSequence([
       { match: "/deploy-launch/", response: [] },
-      { match: "/deploy-launch/start", response: buildPipelineRun({ status: "running" }) },
+      { match: "/deploy-launch/request-approval", response: buildApprovalRequest({ status: "pending" }) },
     ]);
 
     renderWithProviders(<DeployLaunchPage />, {
@@ -67,9 +107,9 @@ describe("DeployLaunchPage", () => {
         expect(screen.getByText(DEPLOYMENT_STEP_NAMES[stepId])).toBeInTheDocument();
       }
     });
-    expect(screen.queryByText("Security Scan (Backend & Frontend)")).not.toBeInTheDocument();
+    expect(screen.getByText("Security Scan (Backend & Frontend)")).toBeInTheDocument();
     expect(screen.getAllByText("Not Started").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Starting Deploy & Launch automatically...")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Request release approval/i })).toBeInTheDocument();
   });
 
   it("shows step progress for an in-flight pipeline run", async () => {
@@ -166,6 +206,15 @@ describe("DeployLaunchPage", () => {
           buildPipelineRun({
             status: "running",
             steps: [
+              {
+                step_id: "validate-deployment-contract",
+                name: "Validate Deployment Contract",
+                status: "completed",
+                detail: "Validated.",
+                error: null,
+                started_at: "2026-07-23T11:59:58Z",
+                completed_at: "2026-07-23T11:59:59Z",
+              },
               {
                 step_id: "generate-access-policy",
                 name: "Generate Access Policy & Least Access",
@@ -313,13 +362,21 @@ describe("DeployLaunchPage", () => {
     windowOpenSpy.mockRestore();
   });
 
-  it("shows a plain error banner (no auto-retry or approval dance) when starting the pipeline fails", async () => {
-    // Regression test for the reported bug: Deploy & Launch used to require
-    // a "workflow_run_id" approval-checkpoint decision before it would
-    // retry start() - that whole approve/decide round-trip is gone, so a
-    // failed start() must simply surface its error message once.
+  it("shows a plain error banner (single surfaced message, no silent extra retry) when start() fails after approval", async () => {
+    // Regression test for the reported bug: a failed start() used to loop
+    // back into another approval round-trip instead of just surfacing its
+    // error. The release-approval gate itself (request -> approve) is a
+    // deliberate, required feature (see DeployLaunchPage's "Non-production
+    // release approval" card) - this test asserts that once that gate has
+    // already been satisfied, a failing start() shows its error exactly
+    // once and does not re-request or re-decide approval on its own.
     const fetchMock = mockFetchSequence([
       { match: "/deploy-launch/", response: [] },
+      { match: "/deploy-launch/request-approval", response: buildApprovalRequest({ status: "pending" }) },
+      {
+        match: "/approvals/approval-1/decide",
+        response: { id: "decision-1", request_id: "approval-1", decision: "approved", decided_by: "user", decided_at: "2026-07-23T12:01:00Z", rationale: "Human non-production release decision." },
+      },
       {
         match: "/deploy-launch/start",
         response: { detail: "workflow_run_id is required to approve the final output checkpoint." },
@@ -332,6 +389,10 @@ describe("DeployLaunchPage", () => {
       workflowRunId: FIXTURE_WORKFLOW_RUN_ID,
     });
 
+    await userEvent.click(await screen.findByRole("button", { name: /Request release approval/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Approve$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Start approved deployment/i }));
+
     await waitFor(() =>
       expect(
         screen.getByText(/workflow_run_id is required to approve the final output checkpoint/i),
@@ -342,8 +403,8 @@ describe("DeployLaunchPage", () => {
       String(call[0]).endsWith("/deploy-launch/start"),
     );
     expect(startCalls).toHaveLength(1);
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/approvals"))).toBe(false);
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/decide"))).toBe(false);
+    const decideCalls = fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/decide"));
+    expect(decideCalls).toHaveLength(1);
   });
 
   it("offers a plain retry (no forced redirect) when an earlier workflow step had not completed - the backend now self-heals by resuming the run", async () => {
