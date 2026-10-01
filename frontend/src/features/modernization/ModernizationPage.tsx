@@ -8,6 +8,8 @@ import {
   Field,
   Input,
   Link,
+  MessageBar,
+  MessageBarBody,
   Option,
   Text,
   Title2,
@@ -15,31 +17,46 @@ import {
 import { ErrorState } from "@/components/ErrorState";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
+import { platformConfigApi } from "@/services/platformConfigApi";
 import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
-import { architectureReferenceApi, standardsApi } from "@/services/standardsApi";
 import { useSessionContext } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
 import type { ModernizationCapability, ModernizationPlan } from "@/types/modernization";
 import type { RepositoryAssessment, RepositoryPurposeBinding } from "@/types/repositoryConnection";
-import type { ArchitectureReferenceSnapshot, StandardsSnapshot } from "@/types/standards";
 
-const NONE_OPTION = "__none__";
+/** Capabilities whose target is a bounded, well-known set of Azure
+ * services rather than open-ended free text - offering these as a
+ * dropdown instead of a text box prevents the customer from typing an
+ * unsupported/misspelled value Genie would then have to reject or guess
+ * at. Every other capability's target space (a specific framework
+ * version, a specific evidenced dependency, ...) has no fixed catalog, so
+ * those stay free text. */
+const CAPABILITY_TARGET_OPTIONS: Record<string, string[]> = {
+  rehost_lift_and_shift: [
+    "Azure App Service",
+    "Azure Container Apps",
+    "Azure Kubernetes Service (AKS)",
+    "Azure Functions",
+  ],
+};
 
 export function ModernizationPage(): JSX.Element {
   const navigate = useNavigate();
   const { sessionId } = useSessionContext();
   const [bindings, setBindings] = useState<RepositoryPurposeBinding[]>([]);
   const [assessments, setAssessments] = useState<RepositoryAssessment[]>([]);
-  const [snapshots, setSnapshots] = useState<StandardsSnapshot[]>([]);
-  const [architectureReferences, setArchitectureReferences] = useState<
-    ArchitectureReferenceSnapshot[]
-  >([]);
   const [plans, setPlans] = useState<ModernizationPlan[]>([]);
   const [capabilities, setCapabilities] = useState<ModernizationCapability[]>([]);
+  // Whether an administrator has configured a platform-level
+  // architecture/standards reference (see /configure) - shown read-only so
+  // the customer can see Genie is actually using what they configured,
+  // instead of a misleading "None - let Genie decide" session-override
+  // control that never reflected the platform default (see the bug report
+  // this replaced).
+  const [platformArchitectureCount, setPlatformArchitectureCount] = useState<number | null>(null);
+  const [platformStandardsCount, setPlatformStandardsCount] = useState<number | null>(null);
   const [bindingId, setBindingId] = useState("");
   const [assessmentId, setAssessmentId] = useState("");
-  const [snapshotId, setSnapshotId] = useState("");
-  const [architectureReferenceId, setArchitectureReferenceId] = useState("");
   const [capabilityId, setCapabilityId] = useState("");
   const [target, setTarget] = useState("");
   const [working, setWorking] = useState(false);
@@ -53,26 +70,26 @@ export function ModernizationPage(): JSX.Element {
       const [
         allBindings,
         allAssessments,
-        allSnapshots,
-        allArchitectureReferences,
         allPlans,
         allCapabilities,
+        architectureRepos,
+        standardsRepos,
       ] = await Promise.all([
         repositoryConnectionApi.listBindings(sessionId),
         repositoryConnectionApi.listAssessments(sessionId),
-        standardsApi.list(sessionId),
-        architectureReferenceApi.list(sessionId),
         modernizationApi.list(sessionId),
         modernizationApi.capabilities(sessionId),
+        platformConfigApi.list("architecture"),
+        platformConfigApi.list("standards"),
       ]);
       const codeBindings = allBindings.filter(
         (binding) => binding.purpose === "code" && binding.status === "approved",
       );
       setBindings(codeBindings);
-      setSnapshots(allSnapshots);
-      setArchitectureReferences(allArchitectureReferences);
       setPlans(allPlans);
       setCapabilities(allCapabilities);
+      setPlatformArchitectureCount(architectureRepos.length);
+      setPlatformStandardsCount(standardsRepos.length);
       setBindingId((current) => current || codeBindings[0]?.id || "");
       setCapabilityId((current) => current || allCapabilities[0]?.id || "");
       // A "Modernize and deliver" mission can reach this page straight
@@ -124,10 +141,13 @@ export function ModernizationPage(): JSX.Element {
       const plan = await modernizationApi.generate(sessionId, {
         binding_id: bindingId,
         assessment_id: assessmentId,
-        standards_snapshot_id: snapshotId || null,
+        // Architecture/standards references are configured once at the
+        // platform level (see /configure) and applied automatically on
+        // the backend - there is no session-level override anymore.
+        standards_snapshot_id: null,
         capability_id: capability.id,
         target: capability.target_label ? target.trim() : null,
-        architecture_reference_snapshot_id: architectureReferenceId || null,
+        architecture_reference_snapshot_id: null,
       });
       setPlans((current) => [plan, ...current]);
     } catch (err) {
@@ -139,8 +159,6 @@ export function ModernizationPage(): JSX.Element {
     sessionId,
     bindingId,
     assessmentId,
-    snapshotId,
-    architectureReferenceId,
     capabilities,
     capabilityId,
     target,
@@ -212,45 +230,29 @@ export function ModernizationPage(): JSX.Element {
           </Dropdown>
         </Field>
         <Field
-          label="Standards snapshot (optional)"
-          hint="Your own opinionated standards to apply. Leave as None and Genie applies its own best-practice judgment."
+          label="Standards and architecture reference"
+          hint="Configured once for the whole platform in ⚙️ Configure - applied automatically to every plan unless that page has none set."
         >
-          <Dropdown
-            value={
-              snapshots.find((item) => item.id === snapshotId)?.repository_full_name ?? "None"
-            }
-            selectedOptions={[snapshotId || NONE_OPTION]}
-            onOptionSelect={(_, data) =>
-              setSnapshotId(data.optionValue === NONE_OPTION ? "" : data.optionValue ?? "")
-            }
-          >
-            <Option value={NONE_OPTION}>None - let Genie decide</Option>
-            {snapshots.map((item) => (
-              <Option key={item.id} value={item.id}>{item.repository_full_name}</Option>
-            ))}
-          </Dropdown>
-        </Field>
-        <Field
-          label="Architecture reference (optional)"
-          hint="Your own opinionated architecture to align with. Leave as None and Genie decides the architecture itself."
-        >
-          <Dropdown
-            value={
-              architectureReferences.find((item) => item.id === architectureReferenceId)
-                ?.repository_full_name ?? "None"
-            }
-            selectedOptions={[architectureReferenceId || NONE_OPTION]}
-            onOptionSelect={(_, data) =>
-              setArchitectureReferenceId(
-                data.optionValue === NONE_OPTION ? "" : data.optionValue ?? "",
-              )
-            }
-          >
-            <Option value={NONE_OPTION}>None - let Genie decide</Option>
-            {architectureReferences.map((item) => (
-              <Option key={item.id} value={item.id}>{item.repository_full_name}</Option>
-            ))}
-          </Dropdown>
+          <MessageBar intent={platformArchitectureCount || platformStandardsCount ? "success" : "info"}>
+            <MessageBarBody>
+              {platformArchitectureCount ? (
+                <Text block>
+                  Using {platformArchitectureCount} configured architecture reference
+                  repositor{platformArchitectureCount === 1 ? "y" : "ies"}.
+                </Text>
+              ) : (
+                <Text block>No architecture reference configured - Genie will apply its own best-practice judgment.</Text>
+              )}
+              {platformStandardsCount ? (
+                <Text block>
+                  Using {platformStandardsCount} configured standards repositor
+                  {platformStandardsCount === 1 ? "y" : "ies"}.
+                </Text>
+              ) : (
+                <Text block>No standards repository configured - Genie will apply its own best-practice judgment.</Text>
+              )}
+            </MessageBarBody>
+          </MessageBar>
         </Field>
         <Field
           label="Modernization capability"
@@ -270,14 +272,28 @@ export function ModernizationPage(): JSX.Element {
             ))}
           </Dropdown>
         </Field>
-        {capabilities.find((item) => item.id === capabilityId)?.target_label ? (
-          <Field
-            label={capabilities.find((item) => item.id === capabilityId)?.target_label}
-            required
-          >
-            <Input value={target} onChange={(_, data) => setTarget(data.value)} />
-          </Field>
-        ) : null}
+        {(() => {
+          const selectedCapability = capabilities.find((item) => item.id === capabilityId);
+          if (!selectedCapability?.target_label) return null;
+          const boundedOptions = CAPABILITY_TARGET_OPTIONS[selectedCapability.id];
+          return (
+            <Field label={selectedCapability.target_label} required>
+              {boundedOptions ? (
+                <Dropdown
+                  value={target}
+                  selectedOptions={target ? [target] : []}
+                  onOptionSelect={(_, data) => setTarget(data.optionValue ?? "")}
+                >
+                  {boundedOptions.map((option) => (
+                    <Option key={option} value={option}>{option}</Option>
+                  ))}
+                </Dropdown>
+              ) : (
+                <Input value={target} onChange={(_, data) => setTarget(data.value)} />
+              )}
+            </Field>
+          );
+        })()}
         <Button
           appearance="primary"
           disabled={

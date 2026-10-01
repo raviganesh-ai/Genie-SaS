@@ -12,7 +12,6 @@ import { DeployLaunchPage } from "@/features/deploy-launch/DeployLaunchPage";
 import { DiscoveryPage } from "@/features/discovery/DiscoveryPage";
 import { RepositoryConnectionPage } from "@/features/repository-connections/RepositoryConnectionPage";
 import { DependencyMappingPage } from "@/features/dependency-mapping/DependencyMappingPage";
-import { StandardsSourcePage } from "@/features/standards/StandardsSourcePage";
 import { IqCollaborationPage } from "@/features/iq/IqCollaborationPage";
 import { ModernizationPage } from "@/features/modernization/ModernizationPage";
 import { PhaseTrackingPage } from "@/features/phase-tracking/PhaseTrackingPage";
@@ -29,7 +28,6 @@ const router = createBrowserRouter([
       { path: "discovery", element: <DiscoveryPage /> },
       { path: "repository-connections", element: <RepositoryConnectionPage /> },
       { path: "dependency-mapping", element: <DependencyMappingPage /> },
-      { path: "standards", element: <StandardsSourcePage /> },
       { path: "iq-collaboration", element: <IqCollaborationPage /> },
       { path: "modernization", element: <ModernizationPage /> },
       { path: "phases", element: <PhaseTrackingPage /> },

@@ -22,13 +22,6 @@ capabilities:
     instruction_template: >-
       Upgrade or replace the evidenced dependency with {target}. Change only directly affected
       integrations, configuration, tests, lock files, and documentation.
-  - id: standards_remediation
-    name: Standards conformance remediation
-    description: Remediate findings from the selected commit-pinned standards assessment.
-    target_label:
-    instruction_template: >-
-      Remediate only the non-conformant findings in the selected standards assessment.
-      Do not introduce unrelated architecture or product changes.
   - id: strategy_recommendation
     name: Modernization strategy recommendation
     description: >-

@@ -238,8 +238,8 @@ export function DependencyMappingPage(): JSX.Element {
               ))
             )}
           </Card>
-          <Button appearance="secondary" onClick={() => navigate("/standards")}>
-            Continue to Architecture Standards
+          <Button appearance="secondary" onClick={() => navigate("/iq-collaboration")}>
+            Continue to IQ Collaboration
           </Button>
         </>
       ) : null}

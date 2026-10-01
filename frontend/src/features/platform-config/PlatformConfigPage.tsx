@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Badge,
   Button,
@@ -45,6 +46,7 @@ function pathsFromInput(value: string): string[] {
  * which still works as a per-session override on top of this default).
  */
 export function PlatformConfigPage(): JSX.Element {
+  const navigate = useNavigate();
   const [status, setStatus] = useState<GitHubMcpConnectionStatus | null>(null);
   const [repositories, setRepositories] = useState<GitHubRepositorySummary[]>([]);
   const [configured, setConfigured] = useState<PlatformReferenceRepository[]>([]);
@@ -159,6 +161,13 @@ export function PlatformConfigPage(): JSX.Element {
           generating a governed modernization plan, unless that specific mission supplies its own
           override.
         </Text>
+        <Button
+          appearance="secondary"
+          onClick={() => navigate(-1)}
+          aria-label="Close configure panel and return to where you were"
+        >
+          ✕ Close
+        </Button>
       </div>
 
       <Card className="repository-intake-card">

@@ -18,7 +18,6 @@ def test_loads_bounded_modernization_capabilities() -> None:
         "runtime_upgrade",
         "framework_upgrade",
         "dependency_upgrade",
-        "standards_remediation",
         "strategy_recommendation",
         "rehost_lift_and_shift",
         "replatform",
@@ -42,7 +41,7 @@ def test_requires_target_only_for_targeted_capabilities() -> None:
     with pytest.raises(ModernizationCapabilityError, match="requires"):
         catalog.get("framework_upgrade").instruction(None)
     with pytest.raises(ModernizationCapabilityError, match="does not accept"):
-        catalog.get("standards_remediation").instruction("arbitrary work")
+        catalog.get("monolith_modularization").instruction("arbitrary work")
 
 
 def test_strategy_recommendation_requires_no_target_and_evaluates_all_options() -> None:

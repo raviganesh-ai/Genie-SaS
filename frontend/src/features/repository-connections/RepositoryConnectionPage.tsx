@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   Combobox,
-  Dropdown,
   Field,
   Input,
   Link,
@@ -58,7 +57,6 @@ export function RepositoryConnectionPage(): JSX.Element {
   const [bindings, setBindings] = useState<RepositoryPurposeBinding[]>([]);
   const [selectedRepository, setSelectedRepository] =
     useState<GitHubRepositorySummary | null>(null);
-  const [purpose, setPurpose] = useState<RepositoryPurpose>("code");
   const [requestedRef, setRequestedRef] = useState("");
   const [includedPaths, setIncludedPaths] = useState("");
   const [excludedPaths, setExcludedPaths] = useState("");
@@ -151,7 +149,10 @@ export function RepositoryConnectionPage(): JSX.Element {
     try {
       const binding = await repositoryConnectionApi.createBinding(sessionId, {
         repository: selectedRepository,
-        purpose,
+        // Architecture/standards references are now configured once at
+        // the platform level (see /configure) - Repository Analysis only
+        // ever binds the actual repository being analyzed/modernized.
+        purpose: "code",
         requested_ref: requestedRef.trim(),
         included_paths: pathsFromInput(includedPaths),
         excluded_paths: pathsFromInput(excludedPaths),
@@ -170,7 +171,6 @@ export function RepositoryConnectionPage(): JSX.Element {
   }, [
     sessionId,
     selectedRepository,
-    purpose,
     requestedRef,
     includedPaths,
     excludedPaths,
@@ -228,7 +228,7 @@ export function RepositoryConnectionPage(): JSX.Element {
       </Card>
 
       <Card className="repository-intake-card">
-        <Text weight="semibold" size={400}>2. Select repository and purpose</Text>
+        <Text weight="semibold" size={400}>2. Select repository</Text>
         <Field label="Repository" required hint={searching ? "Searching..." : undefined}>
           <Combobox
             freeform
@@ -253,17 +253,6 @@ export function RepositoryConnectionPage(): JSX.Element {
               </Option>
             ))}
           </Combobox>
-        </Field>
-        <Field label="Evidence purpose" required>
-          <Dropdown
-            value={PURPOSE_LABELS[purpose]}
-            selectedOptions={[purpose]}
-            onOptionSelect={(_, data) => setPurpose(data.optionValue as RepositoryPurpose)}
-          >
-            {Object.entries(PURPOSE_LABELS).map(([value, label]) => (
-              <Option key={value} value={value}>{label}</Option>
-            ))}
-          </Dropdown>
         </Field>
         <Field label="Branch or ref" required hint="Genie resolves this to a 40-character commit SHA.">
           <Input

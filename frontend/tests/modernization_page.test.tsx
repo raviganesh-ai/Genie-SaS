@@ -18,11 +18,11 @@ describe("ModernizationPage", () => {
             instruction_template: "Upgrade to {target}.",
           },
           {
-            id: "standards_remediation",
-            name: "Standards conformance remediation",
-            description: "Remediate selected findings.",
+            id: "monolith_modularization",
+            name: "Monolith to modular monolith",
+            description: "Introduce internal module boundaries.",
             target_label: null,
-            instruction_template: "Remediate findings.",
+            instruction_template: "Refactor the monolith.",
           },
         ],
       },
@@ -35,11 +35,7 @@ describe("ModernizationPage", () => {
         response: [],
       },
       {
-        match: `/sessions/${FIXTURE_SESSION_ID}/standards`,
-        response: [],
-      },
-      {
-        match: `/sessions/${FIXTURE_SESSION_ID}/architecture-reference`,
+        match: "/platform-config/reference-repositories",
         response: [],
       },
       {
@@ -105,8 +101,7 @@ describe("ModernizationPage", () => {
         response: assessment,
       },
       { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
-      { match: `/sessions/${FIXTURE_SESSION_ID}/standards`, response: [] },
-      { match: `/sessions/${FIXTURE_SESSION_ID}/architecture-reference`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
       { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [] },
     ]);
 

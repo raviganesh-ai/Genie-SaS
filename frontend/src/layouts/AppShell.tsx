@@ -31,7 +31,6 @@ const NAV_ITEMS: NavItemConfig[] = [
     icon: "🔗",
     aliases: [
       "/dependency-mapping",
-      "/standards",
       "/iq-collaboration",
       "/modernization",
     ],
