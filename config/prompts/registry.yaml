@@ -1811,7 +1811,7 @@ prompts:
       not include services that are absent from the architecture. If a logical platform label is
       not independently billed, represent its underlying billable Azure resource as its own
       architecture node and price that node instead. Keep the
-      complete JSON response under 20,000 characters. Keep each summary under 800 characters,
+      complete JSON response under 20,000 characters. Keep each summary under 2,000 characters,
       target 1,200 to 2,500 characters each for requirements_text and architecture_text and
       never exceed 12,000 characters for either field. Return at most 10 architecture nodes,
       12 edges, 5 pros, 5 cons, 8 evidence references, and 10 pricing queries per solution.
@@ -1828,4 +1828,4 @@ prompts:
       - discovery_context
       - retry_instruction
       - source_material
-    version: "2.5.0"
+    version: "2.6.0"

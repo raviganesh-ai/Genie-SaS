@@ -96,7 +96,7 @@ class _SolutionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    summary: str = Field(min_length=1, max_length=800)
+    summary: str = Field(min_length=1, max_length=2000)
     requirements_text: str = Field(min_length=1, max_length=12000)
     architecture_text: str = Field(min_length=1, max_length=12000)
     architecture_nodes: list[ArchitectureNode] = Field(min_length=1, max_length=10)
