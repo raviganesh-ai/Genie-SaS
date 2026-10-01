@@ -41,6 +41,29 @@ function pathsFromInput(value: string): string[] {
     .filter(Boolean);
 }
 
+/** Applied when the user leaves "Excluded paths" blank - without this,
+ * a real repository's generated/dependency/cache directories (easily
+ * hundreds of extra files and directory-listing round-trips) get read
+ * just like source code, making an assessment take many times longer
+ * than necessary for no analytical benefit. The user can still override
+ * this by typing their own excluded paths. */
+const DEFAULT_EXCLUDED_PATHS = [
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "vendor",
+  "target",
+  "bin",
+  "obj",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".mypy_cache",
+];
+
 export function RepositoryConnectionPage(): JSX.Element {
   const navigate = useNavigate();
   const { sessionId, missionKind } = useSessionContext();
@@ -155,7 +178,10 @@ export function RepositoryConnectionPage(): JSX.Element {
         purpose: "code",
         requested_ref: requestedRef.trim(),
         included_paths: pathsFromInput(includedPaths),
-        excluded_paths: pathsFromInput(excludedPaths),
+        excluded_paths:
+          pathsFromInput(excludedPaths).length > 0
+            ? pathsFromInput(excludedPaths)
+            : DEFAULT_EXCLUDED_PATHS,
       });
       setBindings((current) => [
         ...current.filter((item) => item.purpose !== binding.purpose),
@@ -268,7 +294,10 @@ export function RepositoryConnectionPage(): JSX.Element {
             onChange={(_, data) => setIncludedPaths(data.value)}
           />
         </Field>
-        <Field label="Excluded paths" hint="Optional comma-separated repository-relative paths.">
+        <Field
+          label="Excluded paths"
+          hint="Optional comma-separated repository-relative paths. Leave blank and Genie skips common noise (node_modules, .git, dist, build, __pycache__, .venv, vendor, and similar) automatically."
+        >
           <Input
             value={excludedPaths}
             placeholder="vendor, generated"

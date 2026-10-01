@@ -15,6 +15,7 @@ import {
   Title2,
 } from "@fluentui/react-components";
 import { ErrorState } from "@/components/ErrorState";
+import { useElapsedSeconds } from "@/hooks/useElapsedSeconds";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
 import { platformConfigApi } from "@/services/platformConfigApi";
@@ -62,6 +63,7 @@ export function ModernizationPage(): JSX.Element {
   const [working, setWorking] = useState(false);
   const [assessing, setAssessing] = useState(false);
   const [error, setError] = useState<SafeError | null>(null);
+  const assessingElapsedSeconds = useElapsedSeconds(assessing);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -213,7 +215,14 @@ export function ModernizationPage(): JSX.Element {
             ))}
           </Dropdown>
         </Field>
-        <Field label="Dependency assessment" hint={assessing ? "Reading the bound repository live..." : undefined}>
+        <Field
+          label="Dependency assessment"
+          hint={
+            assessing
+              ? `Reading the bound repository live... (${assessingElapsedSeconds}s - larger repositories can take several minutes)`
+              : undefined
+          }
+        >
           <Dropdown
             value={
               assessing
