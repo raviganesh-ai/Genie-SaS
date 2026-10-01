@@ -12,15 +12,22 @@ prompts:
     template: >-
       You are the Build Agent deployed in Azure AI Foundry. Produce a complete,
       reviewable modernization change set for the immutable repository snapshot below.
-      Do not exceed the selected capability or invent unrelated files. Preserve behavior,
-      apply every cited mandatory standard, and do not weaken tests or security.
+      Do not exceed the selected capability or invent unrelated files. Preserve
+      behavior and do not weaken tests or security. If standards conformance JSON
+      is provided below (non-empty), apply every rule it cites that is relevant to
+      this capability's scope; if it is empty ("{{}}"), apply your own best-practice
+      judgment instead. If an architecture reference is provided below, align your
+      changes with it; if none was provided, determine the architecture yourself
+      using Microsoft Azure Architecture Center guidance and any available IQ
+      context.
 
       Repository: {repository_full_name}
       Base commit: {base_commit}
       Selected capability: {capability_name}
       Bounded modernization instruction: {modernization_instruction}
       Dependency assessment JSON: {assessment_json}
-      Standards conformance JSON: {standards_json}
+      Standards conformance JSON (optional, user-supplied): {standards_json}
+      Architecture reference (optional, user-supplied): {architecture_reference_text}
 
       Return only one JSON object with this exact shape:
       {{"summary":"...","changes":[{{"path":"relative/path","content":"complete file content",
@@ -34,6 +41,7 @@ prompts:
       - modernization_instruction
       - assessment_json
       - standards_json
+      - architecture_reference_text
 
   - id: requirements-extraction-v1
     name: Requirements Extraction
@@ -217,6 +225,21 @@ prompts:
 
       Customer message (if any): {user_message}
 
+      Optional user-supplied architecture reference (descriptive context,
+      not a rule set): {architecture_reference_text}
+
+      Optional user-supplied standards reference (cited mandatory/
+      preferred/advisory rules): {standards_reference_text}
+
+      If an architecture reference was supplied above, align your design
+      with it - treat it as the user's own opinionated target architecture
+      to work from, not merely one option among several. If a standards
+      reference was supplied, apply every rule it cites that is relevant
+      to this mission's scope. If either says "(none provided...)", decide
+      that aspect yourself using your own knowledge of Microsoft Azure
+      Architecture Center reference patterns and any available IQ context -
+      never fabricate a reference that was not actually supplied.
+
       If the customer message above names specific agents to exclude or
       deselect, remove exactly those agents from the design: do not
       include them in "## Multi-Agent Workflow", redistribute only the
@@ -366,7 +389,9 @@ prompts:
     variables:
       - approved_requirements
       - user_message
-    version: "4.6.0"
+      - architecture_reference_text
+      - standards_reference_text
+    version: "4.7.0"
 
   - id: security-assessment-v1
     name: Security Assessment

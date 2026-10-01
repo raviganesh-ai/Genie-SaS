@@ -1,5 +1,9 @@
 import { apiFetch } from "./httpClient";
-import type { StandardsConformanceReport, StandardsSnapshot } from "@/types/standards";
+import type {
+  ArchitectureReferenceSnapshot,
+  StandardsConformanceReport,
+  StandardsSnapshot,
+} from "@/types/standards";
 
 export const standardsApi = {
   list(sessionId: string): Promise<StandardsSnapshot[]> {
@@ -21,6 +25,21 @@ export const standardsApi = {
       method: "POST",
       body: { snapshot_id: snapshotId, assessment_id: assessmentId },
     });
+  },
+};
+
+export const architectureReferenceApi = {
+  list(sessionId: string): Promise<ArchitectureReferenceSnapshot[]> {
+    return apiFetch<ArchitectureReferenceSnapshot[]>(
+      `/sessions/${sessionId}/architecture-reference`,
+    );
+  },
+
+  ingest(sessionId: string, bindingId: string): Promise<ArchitectureReferenceSnapshot> {
+    return apiFetch<ArchitectureReferenceSnapshot>(
+      `/sessions/${sessionId}/architecture-reference/ingest/${bindingId}`,
+      { method: "POST" },
+    );
   },
 };
 

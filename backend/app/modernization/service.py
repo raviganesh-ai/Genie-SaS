@@ -19,9 +19,20 @@ from app.repository_assessment.repository import RepositoryAssessmentRepository
 from app.repository_connections.github_mcp_client import GitHubMcpClient, GitHubMcpError
 from app.repository_connections.repository import RepositoryBindingRepository
 from app.services.session_service import SessionService
+from app.standards.architecture_reference_repository import ArchitectureReferenceRepository
 from app.standards.repository import StandardsRepository
 
 _URL_PATTERN = re.compile(r"https://github\.com/[^\s\"']+/pull/\d+")
+
+# Shown to the Foundry Build Agent in place of real reference content when the
+# caller supplied no "architecture"-purpose binding - see generate_plan's
+# architecture_reference_snapshot_id (optional by design: a user may supply
+# their own opinionated architecture reference, or let Genie fall back to its
+# own Microsoft Azure Architecture Center knowledge and available IQ context).
+_NO_ARCHITECTURE_REFERENCE_TEXT = (
+    "(none provided - determine the architecture using Microsoft Azure Architecture Center "
+    "reference guidance and any available IQ context; do not invent an unsupported reference.)"
+)
 
 
 class ModernizationError(RuntimeError):
@@ -47,6 +58,7 @@ class ModernizationService:
         binding_repository: RepositoryBindingRepository,
         assessment_repository: RepositoryAssessmentRepository,
         standards_repository: StandardsRepository,
+        architecture_reference_repository: ArchitectureReferenceRepository,
         session_service: SessionService,
         orchestrator: AgentOrchestrator,
         approval_service: ApprovalService,
@@ -58,6 +70,7 @@ class ModernizationService:
         self._binding_repository = binding_repository
         self._assessment_repository = assessment_repository
         self._standards_repository = standards_repository
+        self._architecture_reference_repository = architecture_reference_repository
         self._session_service = session_service
         self._orchestrator = orchestrator
         self._approval_service = approval_service
@@ -70,18 +83,18 @@ class ModernizationService:
         session_id: str,
         binding_id: str,
         assessment_id: str,
-        standards_snapshot_id: str,
         capability_id: str,
         target: str | None,
         requesting_user_id: str,
         trace_id: str,
+        standards_snapshot_id: str | None = None,
+        architecture_reference_snapshot_id: str | None = None,
     ) -> ModernizationPlan:
         await self._session_service.get_session(
             session_id=session_id, requesting_user_id=requesting_user_id
         )
         binding = await self._binding_repository.get(binding_id=binding_id)
         assessment = await self._assessment_repository.get(assessment_id=assessment_id)
-        standards = await self._standards_repository.get(snapshot_id=standards_snapshot_id)
         if (
             binding is None
             or binding.session_id != session_id
@@ -94,8 +107,35 @@ class ModernizationService:
             raise ModernizationError("Repository assessment was not found for this session.")
         if assessment.binding_id != binding.id or assessment.commit != binding.resolved_commit:
             raise ModernizationError("Assessment does not match the active immutable binding.")
-        if standards is None or standards.session_id != session_id:
-            raise ModernizationError("Standards snapshot was not found for this session.")
+
+        # Optional, exactly like the architecture reference below: a user
+        # may supply their own opinionated standards (a "standards"-purpose
+        # binding) so the generated plan is constrained by them; if absent,
+        # Genie applies its own best-practice judgment instead of failing
+        # closed - standards are a quality aid here, not a precondition.
+        standards_json = "{}"
+        if standards_snapshot_id:
+            standards = await self._standards_repository.get(snapshot_id=standards_snapshot_id)
+            if standards is None or standards.session_id != session_id:
+                raise ModernizationError("Standards snapshot was not found for this session.")
+            standards_json = standards.model_dump_json()
+
+        # Optional: a user may supply their own opinionated architecture
+        # reference (an "architecture"-purpose binding) so the generated
+        # plan aligns with their vision; if absent, Genie decides the
+        # architecture itself (Microsoft Azure Architecture Center guidance
+        # + available IQ context) - see _NO_ARCHITECTURE_REFERENCE_TEXT.
+        architecture_reference_text = _NO_ARCHITECTURE_REFERENCE_TEXT
+        if architecture_reference_snapshot_id:
+            architecture_reference = await self._architecture_reference_repository.get(
+                snapshot_id=architecture_reference_snapshot_id
+            )
+            if architecture_reference is None or architecture_reference.session_id != session_id:
+                raise ModernizationError(
+                    "Architecture reference snapshot was not found for this session."
+                )
+            if architecture_reference.combined_reference_text.strip():
+                architecture_reference_text = architecture_reference.combined_reference_text
 
         capability = self._capability_catalog.get(capability_id)
         instruction = capability.instruction(target)
@@ -108,7 +148,8 @@ class ModernizationService:
                 "capability_name": capability.name,
                 "modernization_instruction": instruction,
                 "assessment_json": assessment.model_dump_json(),
-                "standards_json": standards.model_dump_json(),
+                "standards_json": standards_json,
+                "architecture_reference_text": architecture_reference_text,
             },
             session_id=session_id,
             trace_id=trace_id,
@@ -127,7 +168,7 @@ class ModernizationService:
             session_id=session_id,
             binding_id=binding.id,
             assessment_id=assessment.id,
-            standards_snapshot_id=standards.id,
+            standards_snapshot_id=standards_snapshot_id,
             repository_full_name=binding.repository_full_name,
             base_commit=binding.resolved_commit,
             base_ref=binding.requested_ref,
@@ -135,6 +176,7 @@ class ModernizationService:
             capability_id=capability.id,
             capability_name=capability.name,
             target=target.strip() if target else None,
+            architecture_reference_snapshot_id=architecture_reference_snapshot_id,
             summary=generated.summary,
             changes=generated.changes,
             validation_commands=generated.validation_commands,

@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Combobox,
   Dropdown,
   Field,
   Input,
@@ -115,6 +116,17 @@ export function RepositoryConnectionPage(): JSX.Element {
     }
   }, [query]);
 
+  // Auto-filters as the user types - replaces a separate "Search" button
+  // next to an already-populated repository list, which was confusing
+  // (two controls doing overlapping jobs). Debounced so it doesn't fire a
+  // request per keystroke.
+  useEffect(() => {
+    if (!status?.connected) return;
+    const timeout = setTimeout(() => void handleSearch(), 400);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, status?.connected]);
+
   const handleRepositorySelect = useCallback(
     (fullName: string) => {
       const selected = repositories.find((repository) => repository.full_name === fullName) ?? null;
@@ -209,30 +221,18 @@ export function RepositoryConnectionPage(): JSX.Element {
 
       <Card className="repository-intake-card">
         <Text weight="semibold" size={400}>2. Select repository and purpose</Text>
-        <div className="repository-search-row">
-          <Input
-            value={query}
-            placeholder="Filter repositories visible to the connected identity"
-            onChange={(_, data) => setQuery(data.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && status?.connected) void handleSearch();
-            }}
-          />
-          <Button
-            appearance="secondary"
-            disabled={!status?.connected || searching}
-            onClick={() => void handleSearch()}
-          >
-            {searching ? "Searching..." : "Search"}
-          </Button>
-        </div>
-        <Field label="Repository" required>
-          <Dropdown
-            placeholder="Select a live GitHub repository"
-            value={selectedName}
+        <Field label="Repository" required hint={searching ? "Searching..." : undefined}>
+          <Combobox
+            freeform
+            placeholder="Type to filter repositories visible to the connected identity"
+            value={selectedName || query}
             selectedOptions={selectedName ? [selectedName] : []}
-            disabled={!status?.connected || repositories.length === 0}
+            disabled={!status?.connected}
             onOptionSelect={(_, data) => handleRepositorySelect(data.optionValue ?? "")}
+            onInput={(event) => {
+              setSelectedRepository(null);
+              setQuery((event.target as HTMLInputElement).value);
+            }}
           >
             {repositories.map((repository) => (
               <Option
@@ -244,7 +244,7 @@ export function RepositoryConnectionPage(): JSX.Element {
                 {repository.full_name}{repository.private ? " (private)" : ""}
               </Option>
             ))}
-          </Dropdown>
+          </Combobox>
         </Field>
         <Field label="Evidence purpose" required>
           <Dropdown

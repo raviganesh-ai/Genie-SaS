@@ -21,9 +21,10 @@ class GenerateModernizationPlanRequest(BaseModel):
 
     binding_id: str = Field(min_length=1)
     assessment_id: str = Field(min_length=1)
-    standards_snapshot_id: str = Field(min_length=1)
+    standards_snapshot_id: str | None = Field(default=None, min_length=1)
     capability_id: str = Field(min_length=1)
     target: str | None = Field(default=None, max_length=200)
+    architecture_reference_snapshot_id: str | None = Field(default=None, min_length=1)
 
 
 @router.get("")
@@ -65,6 +66,7 @@ async def generate_modernization_plan(
         standards_snapshot_id=body.standards_snapshot_id,
         capability_id=body.capability_id,
         target=body.target,
+        architecture_reference_snapshot_id=body.architecture_reference_snapshot_id,
         requesting_user_id=user.user_id,
         trace_id=x_correlation_id or str(uuid4()),
     )

@@ -17,9 +17,10 @@ export const modernizationApi = {
     request: {
       binding_id: string;
       assessment_id: string;
-      standards_snapshot_id: string;
+      standards_snapshot_id?: string | null;
       capability_id: string;
       target: string | null;
+      architecture_reference_snapshot_id?: string | null;
     },
   ): Promise<ModernizationPlan> {
     return apiFetch<ModernizationPlan>(`/sessions/${sessionId}/modernization`, {

@@ -48,3 +48,24 @@ export interface StandardsConformanceReport {
   evaluated_at: string;
 }
 
+/**
+ * Optional, user-supplied architecture reference ("architecture"-purpose
+ * repository binding, ingested via StandardsService.ingest_architecture_reference) -
+ * descriptive reference material, not strict rules like StandardsSnapshot.
+ * Applies wherever Genie designs an architecture (Design the solution and
+ * Modernize and deliver alike); absent means Genie decides the architecture
+ * itself.
+ */
+export interface ArchitectureReferenceSnapshot {
+  id: string;
+  session_id: string;
+  binding_id: string;
+  repository_full_name: string;
+  commit: string;
+  paths: string[];
+  content_hashes: Record<string, string>;
+  combined_reference_text: string;
+  gaps: string[];
+  created_at: string;
+}
+

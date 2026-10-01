@@ -23,6 +23,8 @@ from app.models.workflow_stream_models import WorkflowStreamEvent
 from app.orchestration.workflow_event_bus import WorkflowEventBus
 from app.prompts.registry import PromptRegistry
 from app.services.model_catalog_service import ModelCatalogService
+from app.standards.architecture_reference_repository import ArchitectureReferenceRepository
+from app.standards.repository import StandardsRepository
 from app.workflows.models import WorkflowStep
 
 __all__ = ["MissingMemoryReferenceError", "MissingPromptError", "WorkflowStepExecutor"]
@@ -31,6 +33,19 @@ _PREVIEW_MAX_LENGTH = 240
 _DELEGATED_OUTPUT_MARKER = "DELEGATED_OUTPUT_STORED"
 _COMPONENT_FAILURE_MARKER = "GENERATION FAILED"
 _MODEL_CATALOG_SOURCE = "model-catalog"
+_ARCHITECTURE_REFERENCE_SOURCE = "architecture-reference"
+_STANDARDS_REFERENCE_SOURCE = "standards-reference"
+
+# Shown in place of real reference content when the user supplied no
+# "architecture"/"standards"-purpose repository binding for this session -
+# optional by design, same convention as app.modernization.service's
+# _NO_ARCHITECTURE_REFERENCE_TEXT (kept as separate constants since the two
+# call sites have no shared import point and the wording differs slightly).
+_NO_ARCHITECTURE_REFERENCE_TEXT = (
+    "(none provided - decide the architecture yourself using Microsoft Azure "
+    "Architecture Center reference guidance and any available IQ context.)"
+)
+_NO_STANDARDS_REFERENCE_TEXT = "(none provided - no user-supplied standards to apply.)"
 
 
 def _format_model_catalog(available_models: list[str], default_model: str) -> str:
@@ -46,6 +61,17 @@ def _format_model_catalog(available_models: list[str], default_model: str) -> st
 
     models = ", ".join(available_models) if available_models else default_model
     return f"{models} (platform default: {default_model})"
+
+
+def _format_standards_reference(rules: list) -> str:
+    """Renders a ``StandardsSnapshot``'s cited rules as prompt-ready text for
+    the ``standards-reference`` variable source - same purpose as
+    ``_format_model_catalog``, for ``design-architecture``'s optional,
+    user-supplied standards reference rather than a required input."""
+
+    if not rules:
+        return _NO_STANDARDS_REFERENCE_TEXT
+    return "\n".join(f"- [{rule.classification}] {rule.statement}" for rule in rules)
 
 
 def _preview(output_text: str | None) -> str | None:
@@ -114,6 +140,8 @@ class WorkflowStepExecutor:
         memory_service: MemoryService | None = None,
         event_bus: WorkflowEventBus | None = None,
         model_catalog_service: ModelCatalogService | None = None,
+        architecture_reference_repository: ArchitectureReferenceRepository | None = None,
+        standards_repository: StandardsRepository | None = None,
     ) -> None:
         self._agent_registry = agent_registry
         self._prompt_registry = prompt_registry
@@ -122,6 +150,8 @@ class WorkflowStepExecutor:
         self._memory_service = memory_service
         self._event_bus = event_bus
         self._model_catalog_service = model_catalog_service
+        self._architecture_reference_repository = architecture_reference_repository
+        self._standards_repository = standards_repository
 
     async def execute_step(
         self,
@@ -428,6 +458,14 @@ class WorkflowStepExecutor:
                     resolved[variable_name] = _format_model_catalog(
                         catalog.available_models, catalog.default_model
                     )
+            elif source == _ARCHITECTURE_REFERENCE_SOURCE:
+                resolved[variable_name] = await self._latest_architecture_reference_text(
+                    session_id=session_id
+                )
+            elif source == _STANDARDS_REFERENCE_SOURCE:
+                resolved[variable_name] = await self._latest_standards_reference_text(
+                    session_id=session_id
+                )
             elif source.startswith("step-variable:"):
                 _, source_step_id, source_variable_name = source.split(":", maxsplit=2)
                 source_value = (step_variables or {}).get(source_step_id, {}).get(
@@ -450,6 +488,41 @@ class WorkflowStepExecutor:
         if step_input:
             resolved.update(step_input.variables)
         return resolved
+
+    async def _latest_architecture_reference_text(self, *, session_id: str) -> str:
+        """Optional, user-supplied architecture reference for this session
+        (an "architecture"-purpose repository binding - see
+        ``StandardsService.ingest_architecture_reference``). Applies
+        wherever design-architecture happens across all of Genie-SaS, not
+        only governed modernization: a user may supply an opinionated
+        reference repo to shape a brand-new build's design too. Falls back
+        to the "none provided" text when no repository is configured or
+        none has been ingested yet for this session - this is always
+        optional, never a precondition."""
+
+        if self._architecture_reference_repository is None:
+            return _NO_ARCHITECTURE_REFERENCE_TEXT
+        snapshots = await self._architecture_reference_repository.list_for_session(
+            session_id=session_id
+        )
+        if not snapshots:
+            return _NO_ARCHITECTURE_REFERENCE_TEXT
+        latest = max(snapshots, key=lambda snapshot: snapshot.created_at)
+        return latest.combined_reference_text.strip() or _NO_ARCHITECTURE_REFERENCE_TEXT
+
+    async def _latest_standards_reference_text(self, *, session_id: str) -> str:
+        """Optional, user-supplied standards reference for this session (a
+        "standards"-purpose repository binding - see
+        ``StandardsService.ingest``). Same optionality contract as
+        ``_latest_architecture_reference_text``."""
+
+        if self._standards_repository is None:
+            return _NO_STANDARDS_REFERENCE_TEXT
+        snapshots = await self._standards_repository.list_for_session(session_id=session_id)
+        if not snapshots:
+            return _NO_STANDARDS_REFERENCE_TEXT
+        latest = max(snapshots, key=lambda snapshot: snapshot.created_at)
+        return _format_standards_reference(latest.rules)
 
     async def _read_step_output(
         self,

@@ -56,6 +56,8 @@ from app.repositories.workflow_run_repository import (
     InMemoryWorkflowRunRepository,
     WorkflowRunRepository,
 )
+from app.standards.architecture_reference_repository import ArchitectureReferenceRepository
+from app.standards.repository import StandardsRepository
 from app.services.customer_agent_provisioning_service import (
     CustomerAgentProvisioningService,
     NullCustomerAgentProvisioningService,
@@ -361,6 +363,8 @@ def create_agent_orchestrator(
     governance_event_repository: GovernanceEventRepository | None = None,
     approval_repository: ApprovalRepository | None = None,
     recommendation_lineage_repository: RecommendationLineageRepository | None = None,
+    standards_repository: StandardsRepository | None = None,
+    architecture_reference_repository: ArchitectureReferenceRepository | None = None,
 ) -> AgentOrchestrator:
     """Build an ``AgentOrchestrator`` wired to the externally configured registries.
 
@@ -441,6 +445,8 @@ def create_agent_orchestrator(
         memory_service=resolved_memory_service,
         event_bus=resolved_workflow_event_bus,
         model_catalog_service=model_catalog_service,
+        standards_repository=standards_repository,
+        architecture_reference_repository=architecture_reference_repository,
     )
     handoff_service = HandoffService(governance_service=resolved_governance_service)
     decision_graph_service = DecisionGraphService()

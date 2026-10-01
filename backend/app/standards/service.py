@@ -16,7 +16,9 @@ from app.repository_connections.github_mcp_client import GitHubMcpClient, GitHub
 from app.repository_connections.models import RepositoryPurposeBinding
 from app.repository_connections.repository import RepositoryBindingRepository
 from app.services.session_service import SessionService
+from app.standards.architecture_reference_repository import ArchitectureReferenceRepository
 from app.standards.models import (
+    ArchitectureReferenceSnapshot,
     ArchitectureStandardRule,
     ConformanceResult,
     StandardCitation,
@@ -64,6 +66,7 @@ class StandardsService:
         binding_repository: RepositoryBindingRepository,
         assessment_repository: RepositoryAssessmentRepository,
         standards_repository: StandardsRepository,
+        architecture_reference_repository: ArchitectureReferenceRepository,
         session_service: SessionService,
         governance_service: GovernanceService,
         max_files: int,
@@ -73,6 +76,7 @@ class StandardsService:
         self._binding_repository = binding_repository
         self._assessment_repository = assessment_repository
         self._standards_repository = standards_repository
+        self._architecture_reference_repository = architecture_reference_repository
         self._session_service = session_service
         self._governance_service = governance_service
         self._max_files = max_files
@@ -161,6 +165,84 @@ class StandardsService:
             session_id=session_id, requesting_user_id=requesting_user_id
         )
         return await self._standards_repository.list_for_session(session_id=session_id)
+
+    async def ingest_architecture_reference(
+        self,
+        *,
+        session_id: str,
+        binding_id: str,
+        requesting_user_id: str,
+        trace_id: str,
+    ) -> ArchitectureReferenceSnapshot:
+        """Ingests an "architecture"-purpose repository binding as optional,
+        descriptive reference material for governed modernization (see
+        ``ModernizationService.generate_plan``'s ``architecture_reference_snapshot_id``).
+        Unlike ``ingest`` (Standards), this never classifies statements into
+        mandatory/preferred/advisory rules - architecture references are
+        typically narrative/diagrams, not must/shall policy statements."""
+        await self._session_service.get_session(
+            session_id=session_id, requesting_user_id=requesting_user_id
+        )
+        binding = await self._binding_repository.get(binding_id=binding_id)
+        if (
+            binding is None
+            or binding.session_id != session_id
+            or binding.owner_user_id != requesting_user_id
+        ):
+            raise StandardsError("Architecture repository binding was not found for this session.")
+        if binding.purpose != "architecture" or binding.status not in {"validated", "approved"}:
+            raise StandardsError("An active Architecture-purpose repository binding is required.")
+
+        owner, repository = self._split_repository(binding.repository_full_name)
+        markdown_files, gaps = await self._read_markdown_files(
+            binding=binding,
+            owner=owner,
+            repository=repository,
+        )
+        hashes = {
+            path: hashlib.sha256(content.encode()).hexdigest()
+            for path, content in markdown_files.items()
+        }
+        combined_text = "\n\n".join(
+            f"# {path}\n\n{content}" for path, content in sorted(markdown_files.items())
+        )
+        if not markdown_files:
+            gaps.append("No readable Markdown architecture reference was found in the approved path scope.")
+        snapshot = ArchitectureReferenceSnapshot(
+            id=str(uuid4()),
+            session_id=session_id,
+            binding_id=binding.id,
+            repository_full_name=binding.repository_full_name,
+            commit=binding.resolved_commit,
+            paths=sorted(markdown_files),
+            content_hashes=hashes,
+            combined_reference_text=combined_text,
+            gaps=gaps,
+            created_at=datetime.now(UTC),
+        )
+        await self._architecture_reference_repository.put(snapshot)
+        await self._governance_service.record_tool_request(
+            session_id=session_id,
+            trace_id=trace_id,
+            agent_id="standards-service",
+            tool_name="github_mcp.ingest_architecture_reference",
+            detail={
+                "snapshot_id": snapshot.id,
+                "binding_id": binding.id,
+                "commit": binding.resolved_commit,
+                "path_count": len(snapshot.paths),
+            },
+        )
+        return snapshot
+
+    async def list_architecture_reference_snapshots(
+        self, *, session_id: str, requesting_user_id: str
+    ) -> list[ArchitectureReferenceSnapshot]:
+        await self._session_service.get_session(
+            session_id=session_id, requesting_user_id=requesting_user_id
+        )
+        return await self._architecture_reference_repository.list_for_session(session_id=session_id)
+
 
     async def evaluate(
         self,

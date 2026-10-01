@@ -16,23 +16,32 @@ import {
 import { ErrorState } from "@/components/ErrorState";
 import { ApiError } from "@/services/httpClient";
 import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
-import { standardsApi } from "@/services/standardsApi";
+import { architectureReferenceApi, standardsApi } from "@/services/standardsApi";
 import { useSessionContext } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
 import type { RepositoryAssessment, RepositoryPurposeBinding } from "@/types/repositoryConnection";
-import type { StandardsConformanceReport, StandardsSnapshot } from "@/types/standards";
+import type {
+  ArchitectureReferenceSnapshot,
+  StandardsConformanceReport,
+  StandardsSnapshot,
+} from "@/types/standards";
 
 export function StandardsSourcePage(): JSX.Element {
   const navigate = useNavigate();
   const { sessionId } = useSessionContext();
   const [bindings, setBindings] = useState<RepositoryPurposeBinding[]>([]);
+  const [architectureBindings, setArchitectureBindings] = useState<RepositoryPurposeBinding[]>([]);
   const [assessments, setAssessments] = useState<RepositoryAssessment[]>([]);
   const [snapshot, setSnapshot] = useState<StandardsSnapshot | null>(null);
+  const [architectureSnapshot, setArchitectureSnapshot] =
+    useState<ArchitectureReferenceSnapshot | null>(null);
   const [report, setReport] = useState<StandardsConformanceReport | null>(null);
   const [bindingId, setBindingId] = useState("");
+  const [architectureBindingId, setArchitectureBindingId] = useState("");
   const [assessmentId, setAssessmentId] = useState("");
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
+  const [architectureWorking, setArchitectureWorking] = useState(false);
   const [error, setError] = useState<SafeError | null>(null);
 
   const load = useCallback(async () => {
@@ -40,19 +49,26 @@ export function StandardsSourcePage(): JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const [allBindings, allAssessments, snapshots] = await Promise.all([
+      const [allBindings, allAssessments, snapshots, architectureSnapshots] = await Promise.all([
         repositoryConnectionApi.listBindings(sessionId),
         repositoryConnectionApi.listAssessments(sessionId),
         standardsApi.list(sessionId),
+        architectureReferenceApi.list(sessionId),
       ]);
       const standardsBindings = allBindings.filter(
         (binding) => binding.purpose === "standards" && binding.status === "approved",
       );
+      const architecturePurposeBindings = allBindings.filter(
+        (binding) => binding.purpose === "architecture" && binding.status === "approved",
+      );
       setBindings(standardsBindings);
+      setArchitectureBindings(architecturePurposeBindings);
       setAssessments(allAssessments);
       setBindingId((current) => current || standardsBindings[0]?.id || "");
+      setArchitectureBindingId((current) => current || architecturePurposeBindings[0]?.id || "");
       setAssessmentId((current) => current || allAssessments[0]?.id || "");
       setSnapshot(snapshots[0] ?? null);
+      setArchitectureSnapshot(architectureSnapshots[0] ?? null);
     } catch (err) {
       setError(err instanceof ApiError ? err : { message: "Unable to load standards evidence." });
     } finally {
@@ -82,6 +98,23 @@ export function StandardsSourcePage(): JSX.Element {
       setWorking(false);
     }
   }, [sessionId, bindingId]);
+
+  const ingestArchitectureReference = useCallback(async () => {
+    if (!sessionId || !architectureBindingId) return;
+    setArchitectureWorking(true);
+    setError(null);
+    try {
+      setArchitectureSnapshot(
+        await architectureReferenceApi.ingest(sessionId, architectureBindingId),
+      );
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err : { message: "Architecture reference ingestion failed." },
+      );
+    } finally {
+      setArchitectureWorking(false);
+    }
+  }, [sessionId, architectureBindingId]);
 
   const evaluate = useCallback(async () => {
     if (!sessionId || !snapshot || !assessmentId) return;
@@ -128,6 +161,43 @@ export function StandardsSourcePage(): JSX.Element {
         <Button appearance="primary" disabled={!bindingId || working} onClick={() => void ingest()}>
           {working ? "Reading standards..." : "Ingest live standards snapshot"}
         </Button>
+      </Card>
+
+      <Card className="repository-intake-card">
+        <Text weight="semibold">Architecture reference (optional)</Text>
+        <Text block size={200} style={{ opacity: 0.72 }}>
+          Your own opinionated architecture docs, consumed by Design the solution and Modernize
+          and deliver alike. Skip this entirely and Genie decides the architecture itself.
+        </Text>
+        <Dropdown
+          placeholder="Select the approved Architecture repository"
+          value={
+            architectureBindings.find((binding) => binding.id === architectureBindingId)
+              ?.repository_full_name ?? ""
+          }
+          selectedOptions={architectureBindingId ? [architectureBindingId] : []}
+          disabled={loading || architectureWorking}
+          onOptionSelect={(_, data) => setArchitectureBindingId(data.optionValue ?? "")}
+        >
+          {architectureBindings.map((binding) => (
+            <Option key={binding.id} value={binding.id} text={binding.repository_full_name}>
+              {binding.repository_full_name}
+            </Option>
+          ))}
+        </Dropdown>
+        <Button
+          appearance="primary"
+          disabled={!architectureBindingId || architectureWorking}
+          onClick={() => void ingestArchitectureReference()}
+        >
+          {architectureWorking ? "Reading architecture reference..." : "Ingest live architecture reference"}
+        </Button>
+        {architectureSnapshot ? (
+          <Text block size={200} style={{ opacity: 0.72 }}>
+            Ingested {architectureSnapshot.repository_full_name} at{" "}
+            {architectureSnapshot.commit.slice(0, 8)} ({architectureSnapshot.paths.length} file(s)).
+          </Text>
+        ) : null}
       </Card>
 
       {snapshot ? (

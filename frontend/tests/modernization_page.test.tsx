@@ -39,6 +39,10 @@ describe("ModernizationPage", () => {
         response: [],
       },
       {
+        match: `/sessions/${FIXTURE_SESSION_ID}/architecture-reference`,
+        response: [],
+      },
+      {
         match: `/sessions/${FIXTURE_SESSION_ID}/modernization`,
         response: [],
       },

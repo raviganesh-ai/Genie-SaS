@@ -34,7 +34,7 @@ class ModernizationPlan(BaseModel):
     session_id: str
     binding_id: str
     assessment_id: str
-    standards_snapshot_id: str
+    standards_snapshot_id: str | None = None
     repository_full_name: str
     base_commit: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
     base_ref: str
@@ -42,6 +42,11 @@ class ModernizationPlan(BaseModel):
     capability_id: str | None = None
     capability_name: str | None = None
     target: str | None = None
+    # Optional "architecture"-purpose binding's ingested reference material
+    # this plan was aligned to, if the user supplied one - see
+    # ModernizationService.generate_plan. None means Genie decided the
+    # architecture itself.
+    architecture_reference_snapshot_id: str | None = None
     summary: str
     changes: list[ModernizationFileChange] = Field(min_length=1)
     validation_commands: list[str]

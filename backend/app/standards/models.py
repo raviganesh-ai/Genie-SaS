@@ -71,3 +71,26 @@ class StandardsConformanceReport(BaseModel):
     results: list[ConformanceResult]
     evaluated_at: datetime
 
+
+class ArchitectureReferenceSnapshot(BaseModel):
+    """An immutable, commit-pinned snapshot of a user-supplied architecture
+    reference (an "architecture"-purpose repository binding) - descriptive
+    reference material, not strict must/shall rules like
+    ``StandardsSnapshot``. Optional input to governed modernization: when
+    present, Genie aligns the generated plan with it; when absent,
+    modernization falls back to its own Microsoft Azure Architecture Center
+    knowledge and available IQ context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    session_id: str
+    binding_id: str
+    repository_full_name: str
+    commit: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+    paths: list[str]
+    content_hashes: dict[str, str]
+    combined_reference_text: str
+    gaps: list[str]
+    created_at: datetime
+

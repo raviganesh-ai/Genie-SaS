@@ -16,12 +16,14 @@ import { ErrorState } from "@/components/ErrorState";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
 import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
-import { standardsApi } from "@/services/standardsApi";
+import { architectureReferenceApi, standardsApi } from "@/services/standardsApi";
 import { useSessionContext } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
 import type { ModernizationCapability, ModernizationPlan } from "@/types/modernization";
 import type { RepositoryAssessment, RepositoryPurposeBinding } from "@/types/repositoryConnection";
-import type { StandardsSnapshot } from "@/types/standards";
+import type { ArchitectureReferenceSnapshot, StandardsSnapshot } from "@/types/standards";
+
+const NONE_OPTION = "__none__";
 
 export function ModernizationPage(): JSX.Element {
   const navigate = useNavigate();
@@ -29,11 +31,15 @@ export function ModernizationPage(): JSX.Element {
   const [bindings, setBindings] = useState<RepositoryPurposeBinding[]>([]);
   const [assessments, setAssessments] = useState<RepositoryAssessment[]>([]);
   const [snapshots, setSnapshots] = useState<StandardsSnapshot[]>([]);
+  const [architectureReferences, setArchitectureReferences] = useState<
+    ArchitectureReferenceSnapshot[]
+  >([]);
   const [plans, setPlans] = useState<ModernizationPlan[]>([]);
   const [capabilities, setCapabilities] = useState<ModernizationCapability[]>([]);
   const [bindingId, setBindingId] = useState("");
   const [assessmentId, setAssessmentId] = useState("");
   const [snapshotId, setSnapshotId] = useState("");
+  const [architectureReferenceId, setArchitectureReferenceId] = useState("");
   const [capabilityId, setCapabilityId] = useState("");
   const [target, setTarget] = useState("");
   const [working, setWorking] = useState(false);
@@ -43,11 +49,18 @@ export function ModernizationPage(): JSX.Element {
     if (!sessionId) return;
     setError(null);
     try {
-      const [allBindings, allAssessments, allSnapshots, allPlans, allCapabilities] =
-        await Promise.all([
+      const [
+        allBindings,
+        allAssessments,
+        allSnapshots,
+        allArchitectureReferences,
+        allPlans,
+        allCapabilities,
+      ] = await Promise.all([
         repositoryConnectionApi.listBindings(sessionId),
         repositoryConnectionApi.listAssessments(sessionId),
         standardsApi.list(sessionId),
+        architectureReferenceApi.list(sessionId),
         modernizationApi.list(sessionId),
         modernizationApi.capabilities(sessionId),
       ]);
@@ -57,11 +70,11 @@ export function ModernizationPage(): JSX.Element {
       setBindings(codeBindings);
       setAssessments(allAssessments);
       setSnapshots(allSnapshots);
+      setArchitectureReferences(allArchitectureReferences);
       setPlans(allPlans);
       setCapabilities(allCapabilities);
       setBindingId((current) => current || codeBindings[0]?.id || "");
       setAssessmentId((current) => current || allAssessments[0]?.id || "");
-      setSnapshotId((current) => current || allSnapshots[0]?.id || "");
       setCapabilityId((current) => current || allCapabilities[0]?.id || "");
     } catch (err) {
       setError(err instanceof ApiError ? err : { message: "Unable to load modernization data." });
@@ -78,7 +91,6 @@ export function ModernizationPage(): JSX.Element {
       !sessionId ||
       !bindingId ||
       !assessmentId ||
-      !snapshotId ||
       !capability ||
       (capability.target_label && !target.trim())
     ) return;
@@ -88,9 +100,10 @@ export function ModernizationPage(): JSX.Element {
       const plan = await modernizationApi.generate(sessionId, {
         binding_id: bindingId,
         assessment_id: assessmentId,
-        standards_snapshot_id: snapshotId,
+        standards_snapshot_id: snapshotId || null,
         capability_id: capability.id,
         target: capability.target_label ? target.trim() : null,
+        architecture_reference_snapshot_id: architectureReferenceId || null,
       });
       setPlans((current) => [plan, ...current]);
     } catch (err) {
@@ -98,7 +111,16 @@ export function ModernizationPage(): JSX.Element {
     } finally {
       setWorking(false);
     }
-  }, [sessionId, bindingId, assessmentId, snapshotId, capabilities, capabilityId, target]);
+  }, [
+    sessionId,
+    bindingId,
+    assessmentId,
+    snapshotId,
+    architectureReferenceId,
+    capabilities,
+    capabilityId,
+    target,
+  ]);
 
   const execute = useCallback(
     async (planId: string) => {
@@ -162,13 +184,43 @@ export function ModernizationPage(): JSX.Element {
             ))}
           </Dropdown>
         </Field>
-        <Field label="Standards snapshot">
+        <Field
+          label="Standards snapshot (optional)"
+          hint="Your own opinionated standards to apply. Leave as None and Genie applies its own best-practice judgment."
+        >
           <Dropdown
-            value={snapshots.find((item) => item.id === snapshotId)?.repository_full_name ?? ""}
-            selectedOptions={snapshotId ? [snapshotId] : []}
-            onOptionSelect={(_, data) => setSnapshotId(data.optionValue ?? "")}
+            value={
+              snapshots.find((item) => item.id === snapshotId)?.repository_full_name ?? "None"
+            }
+            selectedOptions={[snapshotId || NONE_OPTION]}
+            onOptionSelect={(_, data) =>
+              setSnapshotId(data.optionValue === NONE_OPTION ? "" : data.optionValue ?? "")
+            }
           >
+            <Option value={NONE_OPTION}>None - let Genie decide</Option>
             {snapshots.map((item) => (
+              <Option key={item.id} value={item.id}>{item.repository_full_name}</Option>
+            ))}
+          </Dropdown>
+        </Field>
+        <Field
+          label="Architecture reference (optional)"
+          hint="Your own opinionated architecture to align with. Leave as None and Genie decides the architecture itself."
+        >
+          <Dropdown
+            value={
+              architectureReferences.find((item) => item.id === architectureReferenceId)
+                ?.repository_full_name ?? "None"
+            }
+            selectedOptions={[architectureReferenceId || NONE_OPTION]}
+            onOptionSelect={(_, data) =>
+              setArchitectureReferenceId(
+                data.optionValue === NONE_OPTION ? "" : data.optionValue ?? "",
+              )
+            }
+          >
+            <Option value={NONE_OPTION}>None - let Genie decide</Option>
+            {architectureReferences.map((item) => (
               <Option key={item.id} value={item.id}>{item.repository_full_name}</Option>
             ))}
           </Dropdown>
@@ -205,7 +257,6 @@ export function ModernizationPage(): JSX.Element {
             working ||
             !bindingId ||
             !assessmentId ||
-            !snapshotId ||
             !capabilityId ||
             Boolean(
               capabilities.find((item) => item.id === capabilityId)?.target_label &&

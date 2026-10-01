@@ -86,6 +86,8 @@ workflows:
           - analyze-requirements
         variable_sources:
           approved_requirements: step:analyze-requirements
+          architecture_reference_text: architecture-reference
+          standards_reference_text: standards-reference
 
       - id: build-solution
         agent_id: genie-orchestrator

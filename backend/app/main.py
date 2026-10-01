@@ -143,6 +143,10 @@ from app.services.peer_review_service import create_peer_review_service
 from app.services.requirements_service import create_requirements_service
 from app.services.session_service import create_session_service
 from app.services.workshop_service import create_workshop_service
+from app.standards.architecture_reference_repository import (
+    CosmosArchitectureReferenceRepository,
+    InMemoryArchitectureReferenceRepository,
+)
 from app.standards.repository import CosmosStandardsRepository, InMemoryStandardsRepository
 from app.standards.service import StandardsService
 from app.transcription.speech_service import create_speech_to_text_service
@@ -227,6 +231,7 @@ def create_app(
         repository_binding_repository = None
         repository_assessment_repository = None
         standards_repository = None
+        architecture_reference_repository = None
         iq_evidence_repository = None
         modernization_plan_repository = None
         production_promotion_repository = None
@@ -251,6 +256,9 @@ def create_app(
                 store=document_store
             )
             standards_repository = CosmosStandardsRepository(store=document_store)
+            architecture_reference_repository = CosmosArchitectureReferenceRepository(
+                store=document_store
+            )
             iq_evidence_repository = CosmosIqEvidenceRepository(store=document_store)
             modernization_plan_repository = CosmosModernizationPlanRepository(store=document_store)
             production_promotion_repository = CosmosProductionPromotionRepository(
@@ -263,6 +271,10 @@ def create_app(
                 store=document_store
             )
         app.state.document_store = document_store
+        effective_standards_repository = standards_repository or InMemoryStandardsRepository()
+        effective_architecture_reference_repository = (
+            architecture_reference_repository or InMemoryArchitectureReferenceRepository()
+        )
         orchestrator = create_agent_orchestrator(
             settings=resolved_settings,
             workflow_run_repository=workflow_run_repository,
@@ -270,6 +282,8 @@ def create_app(
             governance_event_repository=governance_event_repository,
             approval_repository=approval_repository,
             recommendation_lineage_repository=recommendation_lineage_repository,
+            standards_repository=effective_standards_repository,
+            architecture_reference_repository=effective_architecture_reference_repository,
         )
         app.state.agent_orchestrator = orchestrator
         app.state.model_catalog_service = create_model_catalog_service(
@@ -373,12 +387,12 @@ def create_app(
             max_depth=resolved_settings.repository_assessment_max_depth,
             max_source_bytes=resolved_settings.repository_assessment_max_source_bytes,
         )
-        effective_standards_repository = standards_repository or InMemoryStandardsRepository()
         app.state.standards_service = StandardsService(
             client=github_mcp_client,
             binding_repository=effective_binding_repository,
             assessment_repository=effective_assessment_repository,
             standards_repository=effective_standards_repository,
+            architecture_reference_repository=effective_architecture_reference_repository,
             session_service=session_service,
             governance_service=orchestrator.governance_service,
             max_files=resolved_settings.repository_assessment_max_files,
@@ -537,6 +551,7 @@ def create_app(
             binding_repository=effective_binding_repository,
             assessment_repository=effective_assessment_repository,
             standards_repository=effective_standards_repository,
+            architecture_reference_repository=effective_architecture_reference_repository,
             session_service=session_service,
             orchestrator=orchestrator,
             approval_service=orchestrator.approval_service,
@@ -730,6 +745,7 @@ def create_app(
     app.include_router(repository_connections.router)
     app.include_router(repository_assessments.router)
     app.include_router(standards.router)
+    app.include_router(standards.architecture_reference_router)
 
     return app
 

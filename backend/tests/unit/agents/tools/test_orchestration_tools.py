@@ -260,6 +260,13 @@ async def test_delegation_prefers_callers_own_resolved_variable_over_model_argum
     assert request.variables == {
         "approved_requirements": "The real, full requirements output from step 1.",
         "user_message": "",
+        # Code-resolved, optional architecture/standards reference text (see
+        # WorkflowStepExecutor's "architecture-reference"/"standards-reference"
+        # variable sources) - absent from context.variables here (this test
+        # does not exercise WorkflowStepExecutor), so falls back to the
+        # model-supplied arguments dict, which also omits them -> "".
+        "architecture_reference_text": "",
+        "standards_reference_text": "",
     }
 
 

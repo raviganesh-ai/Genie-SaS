@@ -144,7 +144,17 @@ _DELEGATIONS: tuple[_Delegation, ...] = (
         tool_name="call_architecture_designer",
         target_agent_id="architecture-designer",
         target_prompt_id="architecture-recommendation-v1",
-        variable_names=("approved_requirements", "user_message"),
+        variable_names=(
+            "approved_requirements",
+            "user_message",
+            # Code-resolved, optional session-scoped reference material
+            # (never something the model needs to supply as a tool-call
+            # argument) - see WorkflowStepExecutor's "architecture-reference"/
+            # "standards-reference" variable_sources and _delegate's
+            # caller_value precedence above.
+            "architecture_reference_text",
+            "standards_reference_text",
+        ),
         shared_memory_classification="architecture_finding",
     ),
     _Delegation(
