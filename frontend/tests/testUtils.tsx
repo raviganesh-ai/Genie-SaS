@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { FluentProvider } from "@fluentui/react-components";
 import { genieDarkTheme } from "@/styles/theme";
-import { SessionProvider } from "@/state/SessionContext";
+import { SessionProvider, type MissionKind } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
 
 /**
@@ -17,6 +17,7 @@ export function renderWithProviders(
   options: {
     sessionId?: string | null;
     workflowRunId?: string | null;
+    missionKind?: MissionKind | null;
     missionStartedAt?: number | null;
     missionError?: SafeError | null;
     governancePolicies?: string;
@@ -29,6 +30,7 @@ export function renderWithProviders(
         <SessionProvider
           initialSessionId={options.sessionId ?? null}
           initialWorkflowRunId={options.workflowRunId ?? null}
+          initialMissionKind={options.missionKind ?? null}
           initialMissionStartedAt={options.missionStartedAt ?? null}
           initialMissionError={options.missionError ?? null}
           initialGovernancePolicies={options.governancePolicies ?? ""}

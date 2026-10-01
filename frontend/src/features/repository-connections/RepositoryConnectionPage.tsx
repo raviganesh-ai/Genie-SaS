@@ -44,7 +44,15 @@ function pathsFromInput(value: string): string[] {
 
 export function RepositoryConnectionPage(): JSX.Element {
   const navigate = useNavigate();
-  const { sessionId } = useSessionContext();
+  const { sessionId, missionKind } = useSessionContext();
+  // A "Modernize and deliver" mission already told Genie its intent by
+  // name on Home - sending it through dependency mapping/standards/IQ
+  // first (which exist to *inform* a modernization plan, not to gate it)
+  // would be asking it to restate that intent via extra clicks. Go
+  // straight to the page that captures what to modernize and to what
+  // target; ModernizationPage fills in any missing dependency assessment
+  // itself.
+  const isModernizationMission = missionKind === "modernize_and_deliver";
   const [status, setStatus] = useState<GitHubMcpConnectionStatus | null>(null);
   const [repositories, setRepositories] = useState<GitHubRepositorySummary[]>([]);
   const [bindings, setBindings] = useState<RepositoryPurposeBinding[]>([]);
@@ -314,9 +322,9 @@ export function RepositoryConnectionPage(): JSX.Element {
         <Button
           appearance="secondary"
           disabled={bindings.length === 0}
-          onClick={() => navigate("/dependency-mapping")}
+          onClick={() => navigate(isModernizationMission ? "/modernization" : "/dependency-mapping")}
         >
-          Continue to dependency mapping
+          {isModernizationMission ? "Continue to modernization plan" : "Continue to dependency mapping"}
         </Button>
       </Card>
 

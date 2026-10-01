@@ -43,6 +43,7 @@ export function ModernizationPage(): JSX.Element {
   const [capabilityId, setCapabilityId] = useState("");
   const [target, setTarget] = useState("");
   const [working, setWorking] = useState(false);
+  const [assessing, setAssessing] = useState(false);
   const [error, setError] = useState<SafeError | null>(null);
 
   const load = useCallback(async () => {
@@ -68,14 +69,37 @@ export function ModernizationPage(): JSX.Element {
         (binding) => binding.purpose === "code" && binding.status === "approved",
       );
       setBindings(codeBindings);
-      setAssessments(allAssessments);
       setSnapshots(allSnapshots);
       setArchitectureReferences(allArchitectureReferences);
       setPlans(allPlans);
       setCapabilities(allCapabilities);
       setBindingId((current) => current || codeBindings[0]?.id || "");
-      setAssessmentId((current) => current || allAssessments[0]?.id || "");
       setCapabilityId((current) => current || allCapabilities[0]?.id || "");
+      // A "Modernize and deliver" mission can reach this page straight
+      // from Repository Analysis, before anyone has run a dependency
+      // assessment on the bound repository. Rather than blocking plan
+      // generation on a manual detour through Dependency Mapping for an
+      // ask the user already made, run it here automatically the first
+      // time it's missing.
+      const firstBindingId = codeBindings[0]?.id ?? "";
+      if (allAssessments.length === 0 && firstBindingId) {
+        setAssessments([]);
+        setAssessing(true);
+        try {
+          const created = await repositoryConnectionApi.createAssessment(sessionId, firstBindingId);
+          setAssessments([created]);
+          setAssessmentId((current) => current || created.id);
+        } catch (err) {
+          setError(
+            err instanceof ApiError ? err : { message: "The live repository assessment failed." },
+          );
+        } finally {
+          setAssessing(false);
+        }
+        return;
+      }
+      setAssessments(allAssessments);
+      setAssessmentId((current) => current || allAssessments[0]?.id || "");
     } catch (err) {
       setError(err instanceof ApiError ? err : { message: "Unable to load modernization data." });
     }
@@ -171,13 +195,16 @@ export function ModernizationPage(): JSX.Element {
             ))}
           </Dropdown>
         </Field>
-        <Field label="Dependency assessment">
+        <Field label="Dependency assessment" hint={assessing ? "Reading the bound repository live..." : undefined}>
           <Dropdown
             value={
-              assessments.find((item) => item.id === assessmentId)?.repository_full_name ?? ""
+              assessing
+                ? "Reading immutable repository..."
+                : assessments.find((item) => item.id === assessmentId)?.repository_full_name ?? ""
             }
             selectedOptions={assessmentId ? [assessmentId] : []}
             onOptionSelect={(_, data) => setAssessmentId(data.optionValue ?? "")}
+            disabled={assessing}
           >
             {assessments.map((item) => (
               <Option key={item.id} value={item.id}>{item.repository_full_name}</Option>
@@ -255,6 +282,7 @@ export function ModernizationPage(): JSX.Element {
           appearance="primary"
           disabled={
             working ||
+            assessing ||
             !bindingId ||
             !assessmentId ||
             !capabilityId ||
