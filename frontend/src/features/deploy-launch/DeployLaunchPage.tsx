@@ -96,6 +96,150 @@ const STEP_ICONS: Record<DeploymentStepId, string> = {
   "launch-mission": "🚀",
 };
 
+/**
+ * A user-facing "stage" is purely a presentation grouping over 1-2 real,
+ * always-executed `DEPLOYMENT_STEP_ORDER` entries - nothing is ever
+ * skipped or fabricated here, every member step still runs exactly as
+ * before. Each internal-only/technical step (a precondition check, or a
+ * step whose own result has no narrative value on its own) folds into its
+ * neighboring, user-meaningful step instead of claiming its own row, so
+ * "Mission Progress" shows a short, readable plan (9 stages) instead of
+ * every one of the 12 underlying steps. `members` must list that group's
+ * real step ids in execution order; every `DeploymentStepId` in
+ * `DEPLOYMENT_STEP_ORDER` must appear in exactly one group (enforced by
+ * `test_deploy_launch_stage_groups_cover_every_step` in the test suite).
+ */
+interface DeployLaunchStage {
+  id: string;
+  name: string;
+  icon: string;
+  members: DeploymentStepId[];
+}
+
+const STAGE_GROUPS: DeployLaunchStage[] = [
+  {
+    id: "generate-access-policy",
+    name: "Generate Access Policy & Least Access",
+    icon: STEP_ICONS["generate-access-policy"],
+    members: ["validate-deployment-contract", "generate-access-policy"],
+  },
+  {
+    id: "provision-foundry-agents",
+    name: "Deploy Agents to Foundry",
+    icon: STEP_ICONS["provision-foundry-agents"],
+    members: ["provision-foundry-agents"],
+  },
+  {
+    id: "provision-data-layer",
+    name: "Provision Data Layer",
+    icon: STEP_ICONS["provision-data-layer"],
+    members: ["provision-data-layer", "validate-data-schema"],
+  },
+  {
+    id: "deploy-backend-service",
+    name: "Deploy Backend Service",
+    icon: STEP_ICONS["deploy-backend-service"],
+    members: ["deploy-backend-service"],
+  },
+  {
+    id: "sync-frontend-integration",
+    name: "Update Frontend Integrations",
+    icon: STEP_ICONS["sync-frontend-integration"],
+    members: ["sync-frontend-integration"],
+  },
+  {
+    id: "deploy-frontend-app",
+    name: "Deploy Frontend",
+    icon: STEP_ICONS["deploy-frontend-app"],
+    members: ["deploy-frontend-app"],
+  },
+  {
+    id: "validate-requirements",
+    name: "Validate Requirements",
+    icon: STEP_ICONS["execute-test-suite"],
+    members: ["generate-test-suite", "execute-test-suite"],
+  },
+  {
+    id: "run-security-scan",
+    name: "Security Scan (Backend & Frontend)",
+    icon: STEP_ICONS["run-security-scan"],
+    members: ["run-security-scan"],
+  },
+  {
+    id: "launch-mission",
+    name: "Launch",
+    icon: STEP_ICONS["launch-mission"],
+    members: ["launch-mission"],
+  },
+];
+
+/** A single user-visible "Mission Progress" row - a `DeploymentStepResult`
+ * shape, but for a `DeployLaunchStage` rather than a raw backend step, so
+ * it carries its own display `name`/`icon` instead of being looked up via
+ * `DEPLOYMENT_STEP_NAMES`/`STEP_ICONS` (which are only defined for real
+ * `DeploymentStepId`s, not synthetic stage ids like
+ * "validate-requirements"). */
+interface DisplayStage {
+  id: string;
+  name: string;
+  icon: string;
+  status: DeploymentStepResult["status"];
+  detail: string;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+/** Collapses the real, per-step status list into `STAGE_GROUPS` rows: a
+ * stage is "running" if any member is, "failed" if any member is (even
+ * if a later member hasn't started), "completed" only once every member
+ * is, and otherwise "pending" - so a user-visible stage never reports
+ * "Deployed" while part of its own real work is still outstanding.
+ * Surfaces the detail/duration of whichever member is most relevant to
+ * what the user would ask "what's happening right now?" - the running
+ * member's own detail while in flight, or the last member's once done. */
+function buildDisplayStages(steps: DeploymentStepResult[]): DisplayStage[] {
+  const byId = new Map(steps.map((step) => [step.step_id, step]));
+  return STAGE_GROUPS.map((stage) => {
+    const members = stage.members.map((id) => byId.get(id)).filter((step): step is DeploymentStepResult => Boolean(step));
+    const failed = members.find((member) => member.status === "failed");
+    const running = members.find((member) => member.status === "running");
+    const allCompleted = members.length > 0 && members.every((member) => member.status === "completed");
+    const status: DeploymentStepResult["status"] = failed
+      ? "failed"
+      : running
+        ? "running"
+        : allCompleted
+          ? "completed"
+          : "pending";
+    const startedAt = members.find((member) => member.started_at)?.started_at ?? null;
+    const lastCompleted = [...members].reverse().find((member) => member.completed_at);
+    const active = failed ?? running ?? (allCompleted ? members[members.length - 1] : undefined);
+    return {
+      id: stage.id,
+      name: stage.name,
+      icon: stage.icon,
+      status,
+      detail: active?.detail ?? "",
+      error: failed?.error ?? null,
+      started_at: startedAt,
+      completed_at: allCompleted ? (lastCompleted?.completed_at ?? null) : null,
+    };
+  });
+}
+
+/** The first not-yet-completed member step of a stage - what a "Retry"
+ * click on that stage's row should resume from, so retrying "Provision
+ * Data Layer" after a schema-validation failure doesn't needlessly
+ * re-provision the Cosmos account that already succeeded. */
+function firstIncompleteMember(stageId: string, steps: DeploymentStepResult[]): DeploymentStepId | null {
+  const stage = STAGE_GROUPS.find((candidate) => candidate.id === stageId);
+  if (!stage) return null;
+  const byId = new Map(steps.map((step) => [step.step_id, step]));
+  const incomplete = stage.members.find((id) => byId.get(id)?.status !== "completed");
+  return incomplete ?? stage.members[stage.members.length - 1];
+}
+
 /** A short "12s"/"1m 4s" duration readout between a step's real started_at
  * and completed_at timestamps - omitted entirely when either is missing so
  * no fabricated timing is ever shown. */
@@ -207,7 +351,7 @@ function FlowMapConnector({ state }: { state: FlowNodeState }): JSX.Element {
  * not-yet-started step as "running" while the mission is active) so this
  * map and the detailed step-row list below always agree on which step is
  * currently "live". */
-function MissionFlowMap({ steps }: { steps: DeploymentStepResult[] }): JSX.Element {
+function MissionFlowMap({ steps }: { steps: DisplayStage[] }): JSX.Element {
   return (
     <div style={{ display: "flex", alignItems: "center", width: "100%", padding: "4px 2px" }}>
       {steps.map((step, index) => {
@@ -223,8 +367,8 @@ function MissionFlowMap({ steps }: { steps: DeploymentStepResult[] }): JSX.Eleme
         const nextState: FlowNodeState =
           step.status === "completed" && steps[index + 1]?.status === "running" ? "active" : state;
         return (
-          <div key={step.step_id} style={{ display: "flex", alignItems: "center", flex: isLast ? "0 0 auto" : 1 }}>
-            <FlowMapNode icon={STEP_ICONS[step.step_id]} label={DEPLOYMENT_STEP_NAMES[step.step_id]} state={state} />
+          <div key={step.id} style={{ display: "flex", alignItems: "center", flex: isLast ? "0 0 auto" : 1 }}>
+            <FlowMapNode icon={step.icon} label={step.name} state={state} />
             {!isLast ? <FlowMapConnector state={nextState} /> : null}
           </div>
         );
@@ -271,9 +415,9 @@ function StepRow({
   onRetry,
   isRetrying,
 }: {
-  step: DeploymentStepResult;
+  step: DisplayStage;
   agents?: ProvisionedAgentStatus[];
-  onRetry?: (stepId: DeploymentStepId) => Promise<void>;
+  onRetry?: (stageId: string) => Promise<void>;
   isRetrying?: boolean;
 }): JSX.Element {
   const color = STEP_STATUS_COLORS[step.status];
@@ -296,9 +440,9 @@ function StepRow({
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <Text size={300} weight="semibold">
           <span aria-hidden="true" style={{ marginRight: 8 }}>
-            {STEP_ICONS[step.step_id]}
+            {step.icon}
           </span>
-          {DEPLOYMENT_STEP_NAMES[step.step_id]}
+          {step.name}
         </Text>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {duration ? (
@@ -314,7 +458,7 @@ function StepRow({
               size="small"
               appearance="subtle"
               disabled={isRetrying}
-              onClick={() => void onRetry(step.step_id)}
+              onClick={() => void onRetry(step.id)}
               style={{ marginLeft: 8 }}
             >
               {isRetrying ? "Retrying..." : "Retry"}
@@ -488,12 +632,6 @@ export function DeployLaunchPage(): JSX.Element {
     [activeRun],
   );
 
-  // Overall mission progress - drives the "skill tree" flow map and the
-  // progress bar/badge above the detailed step list. Purely derived from
-  // the real step statuses above, never a separate/fabricated counter.
-  const completedStepCount = useMemo(() => steps.filter((step) => step.status === "completed").length, [steps]);
-  const progressPct = Math.round((completedStepCount / steps.length) * 100);
-
   // Drives both the activity banner and the optimistic "next step is
   // running" override below. Deliberately also covers the pre-run window -
   // `runs` has loaded but no run exists yet - because the page auto-starts
@@ -560,6 +698,18 @@ export function DeployLaunchPage(): JSX.Element {
     });
   }, [steps, isPipelineActive, awaitingUpstreamStep]);
 
+  // The user-visible "Mission Progress" rows/count/bar are derived from
+  // the same `displaySteps` the activity banner below uses, just grouped
+  // into `STAGE_GROUPS` first - so "X/9 Stages Complete" always matches
+  // exactly what's rendered (never a mismatched "X/12" against a visibly
+  // shorter list of rows).
+  const displayStages = useMemo(() => buildDisplayStages(displaySteps), [displaySteps]);
+  const completedStageCount = useMemo(
+    () => displayStages.filter((stage) => stage.status === "completed").length,
+    [displayStages],
+  );
+  const stageProgressPct = Math.round((completedStageCount / displayStages.length) * 100);
+
   // Drives the gamified "Genie is working with..." activity banner: while
   // the pipeline is genuinely in motion (either the start() request is
   // still in flight, or a run exists and is running) but no error/failure
@@ -611,6 +761,21 @@ export function DeployLaunchPage(): JSX.Element {
       }
     },
     [sessionId, workflowRunId, refresh],
+  );
+
+  // A "Retry" click on a user-visible stage row resumes from that stage's
+  // first not-yet-completed real step - e.g. retrying "Provision Data
+  // Layer" after a schema-validation failure resumes from
+  // `validate-data-schema`, not from `provision-data-layer` again, so a
+  // Cosmos account that already provisioned successfully isn't needlessly
+  // recreated.
+  const handleRetryStage = useCallback(
+    async (stageId: string) => {
+      const resumeFrom = firstIncompleteMember(stageId, steps);
+      if (!resumeFrom) return;
+      await handleRetryStep(resumeFrom);
+    },
+    [steps, handleRetryStep],
   );
 
   const [downloading, setDownloading] = useState(false);
@@ -750,13 +915,13 @@ export function DeployLaunchPage(): JSX.Element {
           action={
             <Badge
               shape="rounded"
-              style={{ backgroundColor: progressPct === 100 ? "#3fa66a" : "#2f83e0", color: "#0b0f14" }}
+              style={{ backgroundColor: stageProgressPct === 100 ? "#3fa66a" : "#2f83e0", color: "#0b0f14" }}
             >
-              {completedStepCount}/{steps.length} Phases Complete
+              {completedStageCount}/{displayStages.length} Stages Complete
             </Badge>
           }
         >
-          <MissionFlowMap steps={displaySteps} />
+          <MissionFlowMap steps={displayStages} />
           <div
             style={{
               height: 8,
@@ -771,8 +936,8 @@ export function DeployLaunchPage(): JSX.Element {
               className="genie-xp-bar"
               style={{
                 height: "100%",
-                width: `${progressPct}%`,
-                backgroundColor: progressPct === 100 ? "#3fa66a" : "#2f83e0",
+                width: `${stageProgressPct}%`,
+                backgroundColor: stageProgressPct === 100 ? "#3fa66a" : "#2f83e0",
               }}
             />
           </div>
@@ -785,16 +950,16 @@ export function DeployLaunchPage(): JSX.Element {
             </MessageBar>
           ) : null}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {displaySteps.map((step) => {
-              const agents =
-                step.step_id === "provision-foundry-agents" ? activeRun?.provisioned_agents ?? [] : undefined;
+            {displayStages.map((stage) => {
+              const agents = stage.id === "provision-foundry-agents" ? activeRun?.provisioned_agents ?? [] : undefined;
+              const stageMembers = STAGE_GROUPS.find((group) => group.id === stage.id)?.members ?? [];
               return (
                 <StepRow
-                  key={step.step_id}
-                  step={step}
+                  key={stage.id}
+                  step={stage}
                   agents={agents}
-                  onRetry={handleRetryStep}
-                  isRetrying={retryingStep === step.step_id}
+                  onRetry={handleRetryStage}
+                  isRetrying={retryingStep !== null && stageMembers.includes(retryingStep)}
                 />
               );
             })}

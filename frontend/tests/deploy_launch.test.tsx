@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, mockFetchSequence } from "./testUtils";
 import { FIXTURE_SESSION_ID, FIXTURE_WORKFLOW_RUN_ID } from "./fixtures";
 import { DeployLaunchPage } from "@/features/deploy-launch/DeployLaunchPage";
-import { DEPLOYMENT_STEP_NAMES, DEPLOYMENT_STEP_ORDER } from "@/types/deployLaunch";
 import type { DeploymentPipelineRun } from "@/types/deployLaunch";
 import type { ApprovalRequest } from "@/types/governance";
 
@@ -101,13 +100,34 @@ describe("DeployLaunchPage", () => {
     });
 
     // The whole plan is visible immediately - no generic "Starting..."
-    // spinner - every step name shows up front with a "Not Started" status.
+    // spinner - every user-facing stage name shows up front with a "Not
+    // Started" status. The underlying pipeline still has all 12 real
+    // `DEPLOYMENT_STEP_ORDER` steps (unaffected by this display grouping),
+    // but a handful of internal/technical steps (contract validation,
+    // schema validation, test generation) are folded into a neighboring
+    // user-meaningful stage so the visible plan reads as a short, simple
+    // list rather than every underlying step.
+    const visibleStageNames = [
+      "Generate Access Policy & Least Access",
+      "Deploy Agents to Foundry",
+      "Provision Data Layer",
+      "Deploy Backend Service",
+      "Update Frontend Integrations",
+      "Deploy Frontend",
+      "Validate Requirements",
+      "Security Scan (Backend & Frontend)",
+      "Launch",
+    ];
     await waitFor(() => {
-      for (const stepId of DEPLOYMENT_STEP_ORDER) {
-        expect(screen.getByText(DEPLOYMENT_STEP_NAMES[stepId])).toBeInTheDocument();
+      for (const name of visibleStageNames) {
+        expect(screen.getByText(name)).toBeInTheDocument();
       }
     });
-    expect(screen.getByText("Security Scan (Backend & Frontend)")).toBeInTheDocument();
+    // Internal/technical steps folded into a neighboring stage no longer
+    // get their own row.
+    expect(screen.queryByText("Validate Deployment Contract")).not.toBeInTheDocument();
+    expect(screen.queryByText("Apply & Validate Data Schema")).not.toBeInTheDocument();
+    expect(screen.queryByText("Generate Requirement Acceptance Tests")).not.toBeInTheDocument();
     expect(screen.getAllByText("Not Started").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /Request release approval/i })).toBeInTheDocument();
   });
@@ -405,6 +425,132 @@ describe("DeployLaunchPage", () => {
     expect(startCalls).toHaveLength(1);
     const decideCalls = fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/decide"));
     expect(decideCalls).toHaveLength(1);
+  });
+
+  it("shows a 2-member stage as In Progress once its first real step completes and its second starts, without a dedicated row for the first", async () => {
+    mockFetchSequence([
+      {
+        match: "/deploy-launch/",
+        response: [
+          buildPipelineRun({
+            status: "running",
+            steps: [
+              {
+                step_id: "validate-deployment-contract",
+                name: "Validate Deployment Contract",
+                status: "completed",
+                detail: "Validated.",
+                error: null,
+                started_at: "2026-07-23T11:59:58Z",
+                completed_at: "2026-07-23T11:59:59Z",
+              },
+              {
+                step_id: "generate-access-policy",
+                name: "Generate Access Policy & Least Access",
+                status: "completed",
+                detail: "Generated.",
+                error: null,
+                started_at: "2026-07-23T11:59:59Z",
+                completed_at: "2026-07-23T12:00:00Z",
+              },
+              {
+                step_id: "provision-foundry-agents",
+                name: "Deploy Agents to Foundry",
+                status: "completed",
+                detail: "Agents deployed.",
+                error: null,
+                started_at: "2026-07-23T12:00:00Z",
+                completed_at: "2026-07-23T12:00:00Z",
+              },
+              {
+                step_id: "provision-data-layer",
+                name: "Provision Data Layer",
+                status: "completed",
+                detail: "Cosmos DB account provisioned.",
+                error: null,
+                started_at: "2026-07-23T12:00:00Z",
+                completed_at: "2026-07-23T12:00:05Z",
+              },
+              {
+                step_id: "validate-data-schema",
+                name: "Apply & Validate Data Schema",
+                status: "running",
+                detail: "Validating mission data schema...",
+                error: null,
+                started_at: "2026-07-23T12:00:06Z",
+                completed_at: null,
+              },
+            ],
+          }),
+        ],
+      },
+    ]);
+
+    renderWithProviders(<DeployLaunchPage />, {
+      sessionId: FIXTURE_SESSION_ID,
+      workflowRunId: FIXTURE_WORKFLOW_RUN_ID,
+    });
+
+    const stageHeading = await screen.findByText("Provision Data Layer");
+    // Scope the status/detail assertions to this stage's own row - a
+    // later, not-yet-reached stage may itself also be optimistically shown
+    // as "In Progress..." (the page's pre-existing "next pending step"
+    // optimism, unrelated to this grouping change), so asserting on the
+    // whole document would be ambiguous.
+    const stageRow = stageHeading.closest("div")?.parentElement as HTMLElement;
+    expect(within(stageRow).getByText("In Progress…")).toBeInTheDocument();
+    expect(within(stageRow).getByText("Validating mission data schema...")).toBeInTheDocument();
+    expect(screen.queryByText("Apply & Validate Data Schema")).not.toBeInTheDocument();
+  });
+
+  it("retries a failed 2-member stage from its first incomplete real step, not from the already-completed one", async () => {
+    const fetchMock = mockFetchSequence([
+      {
+        match: "/deploy-launch/",
+        response: [
+          buildPipelineRun({
+            status: "failed",
+            steps: [
+              {
+                step_id: "provision-data-layer",
+                name: "Provision Data Layer",
+                status: "completed",
+                detail: "Cosmos DB account provisioned.",
+                error: null,
+                started_at: "2026-07-23T12:00:00Z",
+                completed_at: "2026-07-23T12:00:05Z",
+              },
+              {
+                step_id: "validate-data-schema",
+                name: "Apply & Validate Data Schema",
+                status: "failed",
+                detail: "",
+                error: "Schema validation failed: missing required container 'missions'.",
+                started_at: "2026-07-23T12:00:06Z",
+                completed_at: "2026-07-23T12:00:07Z",
+              },
+            ],
+          }),
+        ],
+      },
+      { match: "/deploy-launch/start", response: buildPipelineRun({ status: "running" }) },
+    ]);
+
+    renderWithProviders(<DeployLaunchPage />, {
+      sessionId: FIXTURE_SESSION_ID,
+      workflowRunId: FIXTURE_WORKFLOW_RUN_ID,
+    });
+
+    const retryButton = await screen.findByRole("button", { name: /^Retry$/i });
+    await userEvent.click(retryButton);
+
+    await waitFor(() => {
+      const startCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/deploy-launch/start"));
+      expect(startCall).toBeDefined();
+      const [, startInit] = startCall as unknown as [string, RequestInit];
+      const body = JSON.parse(startInit.body as string);
+      expect(body.resume_from_step).toBe("validate-data-schema");
+    });
   });
 
   it("offers a plain retry (no forced redirect) when an earlier workflow step had not completed - the backend now self-heals by resuming the run", async () => {
