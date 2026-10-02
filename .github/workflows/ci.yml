@@ -1,14 +1,14 @@
 name: CI
 
-# The repo's actual default branch is "master" (verify with `git branch -a`
-# before ever changing this back to "main" - CI silently never ran on any
-# push/PR until this was fixed, since the previous trigger watched a branch
-# that doesn't exist in this repo).
+# The repo's actual default branch is "main" (verified with `git branch -a`
+# and `git remote show origin` - HEAD branch is "main"). A prior edit
+# mistakenly pointed this at "master", which silently prevented CI from
+# ever running on any push/PR for the entire history of this repo.
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   backend:
@@ -62,14 +62,14 @@ jobs:
       - name: Test
         run: npm run test
 
-  # Deploy jobs only run on a real push to master (never on a PR from a
+  # Deploy jobs only run on a real push to main (never on a PR from a
   # fork, and never unless both CI jobs above already passed) - see
   # "Continuous deployment" in README.md for the one-time Azure setup
   # (federated OIDC credential + RBAC) required before these can succeed.
   prepare-gateway:
     name: Prepare platform gateway (API Management)
     needs: [backend, frontend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     outputs:
@@ -129,7 +129,7 @@ jobs:
   deploy-backend:
     name: Deploy backend (private Container Apps)
     needs: [backend, frontend, prepare-gateway, deploy-frontend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     # Safety net: if a step ever hangs (e.g. a CLI retrying on missing/
@@ -228,7 +228,7 @@ jobs:
   deploy-frontend:
     name: Deploy frontend (Static Web Apps)
     needs: [prepare-gateway]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     # Safety net: the swa CLI has been observed to hang (rather than fail

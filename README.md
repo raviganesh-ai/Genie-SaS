@@ -645,7 +645,7 @@ All three require `GENIE_AZURE_FOUNDRY_ENDPOINT` / `GENIE_AZURE_FOUNDRY_PROJECT_
 
 ### Continuous deployment (GitHub Actions)
 
-`.github/workflows/ci.yml` runs on every push/PR to `master` (the repo's actual default branch — double-check this before ever pointing it at `main`). On a real push to `master`, once the `backend` and `frontend` CI jobs pass, two deploy jobs run the exact same steps documented above, automatically:
+`.github/workflows/ci.yml` runs on every push/PR to `main` (the repo's actual default branch - confirmed via `git branch -a`/`git remote show origin`). On a real push to `main`, once the `backend` and `frontend` CI jobs pass, two deploy jobs run the exact same steps documented above, automatically:
 
 - **`prepare-gateway`** — logs into Azure via OIDC federated credential (no client secret), idempotently provisions Standard v2 APIM and its delegated subnet/NSG, proves the gateway reaches the current backend, and emits the verified URL without changing Container Apps public access.
 - **`deploy-frontend`** — builds the frontend against that exact gateway job output and deploys it with `@azure/static-web-apps-cli` using a stored deployment token. It no longer trusts a separately maintained production API URL variable.
@@ -709,7 +709,15 @@ The script uses Microsoft Entra authentication, creates only missing model deplo
 
 ## Deploy log
 
-Every deployment to the shared Azure evaluation environment (backend Container App and/or frontend Static Web App) is recorded here: commit, what changed, and why. Update this section as part of the same commit that ships the fix/feature, before pushing to `master` triggers [Continuous deployment](#continuous-deployment-github-actions).
+Every deployment to the shared Azure evaluation environment (backend Container App and/or frontend Static Web App) is recorded here: commit, what changed, and why. Update this section as part of the same commit that ships the fix/feature, before pushing to `main` triggers [Continuous deployment](#continuous-deployment-github-actions).
+
+### 2026-10-02 — Fix CI/CD never triggering (branch mismatch) + Deploy & Launch stage grouping + Governance page
+
+- **Real, previously-undiscovered CI/CD bug**: `.github/workflows/ci.yml`'s `on: push`/`pull_request` triggers (and all three deploy jobs' `if:` conditions) watched branch `master`, but this repo's actual default/only branch has always been `main` (confirmed via `git branch -a` and `git remote show origin`). `gh run list` showed **zero workflow runs in the repo's history** - every "committed and deployed" step this project has ever gone through was a manual `az acr build`/`az containerapp update`/`swa deploy` command, never the documented CI/CD pipeline. Fixed by pointing every trigger/condition at `main`; this commit's own push is the first one the fixed workflow actually picks up.
+- **Deploy & Launch "Mission Progress" simplified to 9 stages**: the real, always-executed 12-step `DEPLOYMENT_STEP_ORDER` pipeline is unchanged server-side, but `DeployLaunchPage.tsx` now groups a handful of internal/technical steps into their neighboring user-meaningful stage for display (contract validation into "Generate Access Policy & Least Access", schema validation into "Provision Data Layer", test generation/execution into "Validate Requirements") - matching the simple, named list the user asked for, with zero functionality removed. Retrying a failed stage resumes from that stage's own first incomplete real step.
+- **"Governance" sidebar page was empty for non-modernization missions**: `PhaseTrackingPage.tsx` only ever rendered modernization-specific phase/task data, so a `discover_requirements`/prototype mission's Governance page looked entirely blank ("Governance was skipped"). It now renders the already-built but previously-unused `useGovernanceTrace` hook's real governance events, approval checkpoints (with inline Approve/Reject), and an overall compliance badge for every mission kind; the modernization phase/task tracker still renders additively once a session actually has tracked phases.
+- **Tests**: updated `deploy_launch.test.tsx` (2 new tests for stage grouping/targeted retry, 1 existing test rewritten for the new visible stage names; 12/12 pass); new `phase_tracking_page.test.tsx` (3 tests); full frontend suite 91/91 passed, typecheck/lint clean.
+- **Deployed via**: manual `npm run build` + `@azure/static-web-apps-cli deploy` (frontend-only change; no backend changes in this entry).
 
 ### 2026-09-29 — Orchestrator prompts must surface specialist stage failures instead of silently swallowing them
 
@@ -1067,7 +1075,7 @@ This intermediate authenticated-prototype design was replaced the same day by [A
 
 ## Known gaps / next phases
 
-- CI/CD (`.github/workflows/ci.yml`) runs backend pytest/ruff and frontend typecheck/lint/vitest on every push/PR to `master`, then auto-deploys the public APIM/private Container Apps backend and Static Web App on pushes once both pass.
+- CI/CD (`.github/workflows/ci.yml`) runs backend pytest/ruff and frontend typecheck/lint/vitest on every push/PR to `main`, then auto-deploys the public APIM/private Container Apps backend and Static Web App on pushes once both pass.
 - End-to-end Playwright coverage (`e2e/`) is scaffolded but not yet fully built out.
 - **Future enhancement - Impeccable agent design workflow**: evolve the current prompt guidance and pre-deployment detector into an explicit Azure AI Foundry design workflow. Pin and integrity-check the npm-installed Impeccable skill; invoke a dedicated `impeccable-ui-designer` production agent through `AzureAgentGateway` to create a strongly typed, prototype-specific design contract from the approved requirements and architecture; require every initial UI generation and Workshop regeneration to consume that contract; then render desktop/mobile views and run a bounded detector-feedback repair loop before deployment. Persist the skill/version hash, design contract, detector findings, repair attempts, and final decision in Shared Collaboration Memory and the governance trace, and fail closed when the design contract, detector, or required evidence is unavailable. Impeccable remains an agent design skill and detector, not a React component library.
 - Genie and prototype APIM URLs are callable by non-browser clients without authentication. Exact-origin CORS constrains browsers only; the FastAPI backends are network-private, but authentication must be reintroduced before handling sensitive or multi-user workloads.
