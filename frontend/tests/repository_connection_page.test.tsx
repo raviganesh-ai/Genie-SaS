@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { RepositoryConnectionPage } from "@/features/repository-connections/RepositoryConnectionPage";
 import { mockFetchSequence, renderWithProviders } from "./testUtils";
 import { FIXTURE_SESSION_ID } from "./fixtures";
@@ -46,7 +46,12 @@ describe("RepositoryConnectionPage", () => {
     const continueButton = await screen.findByRole("button", {
       name: "Continue to modernization plan",
     });
-    expect(continueButton).toBeEnabled();
+    // The button exists (and is initially disabled) from first render -
+    // it only becomes enabled once the async repository-bindings fetch
+    // resolves, so this must be awaited rather than asserted immediately
+    // after findByRole (which only waits for the element to exist, not
+    // for its enabled state) - a race that was flaky on slower CI runners.
+    await waitFor(() => expect(continueButton).toBeEnabled());
     expect(
       screen.queryByRole("button", { name: "Continue to dependency mapping" }),
     ).not.toBeInTheDocument();
@@ -63,9 +68,10 @@ describe("RepositoryConnectionPage", () => {
       missionKind: "understand_code",
     });
 
-    expect(
-      await screen.findByRole("button", { name: "Continue to dependency mapping" }),
-    ).toBeEnabled();
+    const continueButton = await screen.findByRole("button", {
+      name: "Continue to dependency mapping",
+    });
+    await waitFor(() => expect(continueButton).toBeEnabled());
     expect(
       screen.queryByRole("button", { name: "Continue to modernization plan" }),
     ).not.toBeInTheDocument();
