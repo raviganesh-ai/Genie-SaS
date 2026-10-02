@@ -1,6 +1,7 @@
 """Deterministic commit-pinned repository inventory and graph construction."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -453,13 +454,23 @@ class RepositoryAssessmentService:
                     )
                 )
                 continue
-            raw = await self._get_contents(
-                client=client,
-                owner=owner,
-                repository=repository,
-                path=path,
-                commit=binding.resolved_commit,
-            )
+            try:
+                raw = await self._get_contents_resilient(
+                    client=client,
+                    owner=owner,
+                    repository=repository,
+                    path=path,
+                    commit=binding.resolved_commit,
+                )
+            except RepositoryAssessmentError as exc:
+                gaps.append(
+                    CoverageGap(
+                        category="unreadable_directory",
+                        detail=f"GitHub MCP could not list this path after retrying: {exc}",
+                        paths=[path],
+                    )
+                )
+                continue
             entries = self._directory_entries(raw)
             if entries is None:
                 if isinstance(raw, dict):
@@ -562,13 +573,23 @@ class RepositoryAssessmentService:
                     )
                 )
                 continue
-            raw = await self._get_contents(
-                client=client,
-                owner=owner,
-                repository=repository,
-                path=path,
-                commit=binding.resolved_commit,
-            )
+            try:
+                raw = await self._get_contents_resilient(
+                    client=client,
+                    owner=owner,
+                    repository=repository,
+                    path=path,
+                    commit=binding.resolved_commit,
+                )
+            except RepositoryAssessmentError as exc:
+                gaps.append(
+                    CoverageGap(
+                        category="unreadable_content",
+                        detail=f"GitHub MCP could not read this file after retrying: {exc}",
+                        paths=[path],
+                    )
+                )
+                continue
             content = self._file_text(raw)
             if content is None:
                 gaps.append(
@@ -772,6 +793,45 @@ class RepositoryAssessmentService:
             raise RepositoryAssessmentError(
                 f"GitHub MCP could not read commit-pinned path '{path or '/'}'."
             ) from exc
+
+    async def _get_contents_resilient(
+        self,
+        *,
+        client: GitHubMcpClient,
+        owner: str,
+        repository: str,
+        path: str,
+        commit: str,
+        max_attempts: int = 3,
+    ) -> Any:
+        """Retries a single commit-pinned fetch a few times before giving up.
+
+        A real GitHub MCP read can transiently fail even for a
+        well-formed, previously-successful request (secondary rate
+        limiting, a brief network blip) - and a full assessment of a
+        real, several-hundred-file repository makes that many sequential
+        calls, so hitting at least one transient failure is common, not
+        exceptional. Raises RepositoryAssessmentError only after every
+        attempt is exhausted, so callers can record one coverage gap for
+        that single path and continue the rest of the assessment instead
+        of the whole run aborting over one unlucky request.
+        """
+        last_error: RepositoryAssessmentError | None = None
+        for attempt in range(max_attempts):
+            try:
+                return await self._get_contents(
+                    client=client,
+                    owner=owner,
+                    repository=repository,
+                    path=path,
+                    commit=commit,
+                )
+            except RepositoryAssessmentError as exc:
+                last_error = exc
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+        assert last_error is not None
+        raise last_error
 
     def _require_client(self) -> GitHubMcpClient:
         if self._client is None:

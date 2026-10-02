@@ -563,6 +563,16 @@ async def _run_orchestrator_pipeline(
             # An orchestrator generated before the on_progress contract can
             # still run; it simply cannot emit specialist hand-off narration.
             result = await orchestrator.run(message)
+    except (ValueError, TypeError):
+        # The Orchestrator Agent (construction or run()) rejected this
+        # request's shape - e.g. a free-form conversational message where
+        # the generated UI's JSON configuration was expected, or a
+        # constructor signature mismatch. This is exactly the documented
+        # "cannot accept the submitted request" case above, never a real
+        # pipeline failure - callers fall back to a conversational reply
+        # rather than surfacing a 503 for what is really just "wrong input
+        # shape, try differently."
+        return None
     except Exception as exc:
         _logger.exception("Generated mission orchestrator pipeline failed.")
         raise HTTPException(

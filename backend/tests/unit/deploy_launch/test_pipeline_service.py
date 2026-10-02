@@ -25,6 +25,7 @@ from app.deploy_launch.backend_deployment_service import (
     BackendDeploymentResult,
     NullBackendDeploymentService,
 )
+from app.deploy_launch.data_layer_provisioning_service import NullDataLayerProvisioningService
 from app.deploy_launch.frontend_deployment_service import NullFrontendDeploymentService
 from app.deploy_launch.mission_agent_provisioning_service import (
     NullMissionAgentProvisioningService,
@@ -45,6 +46,7 @@ from app.deploy_launch.security_scan_service import (
     SecurityScanService,
 )
 from app.deploy_launch.test_execution_service import TestExecutionService
+from app.models.approval_models import ApprovalRequest
 from app.models.workflow_models import WorkflowRunResult, WorkflowStepInput, WorkflowStepResult
 from app.orchestration.workflow_event_bus import WorkflowEventBus
 from app.repositories.deployment_run_repository import InMemoryDeploymentRunRepository
@@ -103,6 +105,32 @@ class _FakeSessionService:
         return SimpleNamespace(title="Acme Mission")
 
 
+class _FakeApprovalService:
+    """Always returns an approved 'nonproduction_release' ApprovalRequest
+    for whatever request id DeploymentPipelineService.start() looks up -
+    this pipeline-service suite exercises pipeline behavior, not the
+    approval-framework gate itself (see
+    tests/integration/test_approval_checkpoint_flow.py for that). Every
+    test in this file encodes "{session_id}:{workflow_run_id}" as the
+    approval_request_id it passes to start(), so a single stateless fake
+    can satisfy every test's own session_id/subject_id pair correctly."""
+
+    async def get_request(self, request_id: str) -> ApprovalRequest | None:
+        session_id, _, subject_id = request_id.partition(":")
+        now = datetime.now(UTC)
+        return ApprovalRequest(
+            id=request_id,
+            checkpoint_id="nonproduction-release-checkpoint",
+            session_id=session_id,
+            trace_id="trace-1",
+            requested_by_agent_id="genie-orchestrator",
+            subject_type="nonproduction_release",
+            subject_id=subject_id,
+            status="approved",
+            requested_at=now,
+        )
+
+
 class _FakeOrchestrator:
     def __init__(
         self,
@@ -113,6 +141,7 @@ class _FakeOrchestrator:
     ) -> None:
         self._test_output_text = test_output_text
         self.execute_agent_calls: list[dict] = []
+        self.approval_service = _FakeApprovalService()
         self._run = WorkflowRunResult(
             workflow_run_id="run-1",
             workflow_id="solution-discovery-workflow",
@@ -282,6 +311,7 @@ class _FakeOrchestratorPendingBuild:
         self.resume_calls: list[dict | None] = []
         self.execute_agent_calls: list[dict] = []
         self._test_output_text = test_output_text
+        self.approval_service = _FakeApprovalService()
         self._run = WorkflowRunResult(
             workflow_run_id="run-1",
             workflow_id="solution-discovery-workflow",
@@ -346,6 +376,7 @@ class _FakeOrchestratorStuckOnEarlierGate:
 
     def __init__(self) -> None:
         self.resume_calls: list[dict | None] = []
+        self.approval_service = _FakeApprovalService()
         self._run = WorkflowRunResult(
             workflow_run_id="run-1",
             workflow_id="solution-discovery-workflow",
@@ -409,6 +440,7 @@ def _build_service(
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=backend_deployment_service or NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -457,7 +489,8 @@ async def test_full_pipeline_runs_every_step(tmp_path: Path):
     # Studio's build-solution kickoff - so tests must await that background
     # work to finish rather than expecting the steps to have already run by
     # the time start() itself returns.
-    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1")
+    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1")
     run = await service.wait_for_run(run.id)
 
     assert run.status == "completed"
@@ -467,7 +500,11 @@ async def test_full_pipeline_runs_every_step(tmp_path: Path):
     assert run.frontend_url is not None
     assert run.launch_url == run.frontend_url
     assert run.test_summary is not None
-    assert run.security_findings_count is None
+    # The security scan step now always runs (never conditionally skipped -
+    # see test_security_scan_always_runs_and_blocks_on_a_high_severity_finding),
+    # so a real scan of the generated build always records a finding count
+    # (0 or more), never leaves it unset.
+    assert run.security_findings_count is not None
 
     # Per-agent Foundry provisioning progress must be reported on the run
     # itself (not just an aggregate step status), each landing "completed"
@@ -566,13 +603,15 @@ def test_req_001_uses_public_gateway():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=backend_service,  # type: ignore[arg-type]
         frontend_deployment_service=frontend_service,  # type: ignore[arg-type]
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -610,7 +649,12 @@ class _BlockingSecurityScanService:
         )
 
 
-async def test_passing_fidelity_launches_without_running_security_scan(tmp_path: Path):
+async def test_security_scan_always_runs_and_blocks_on_a_high_severity_finding(tmp_path: Path):
+    """The security scan step runs on every deployment, never skipped just
+    because requirement fidelity passed - matching the project's "full
+    regression security assessment... on every review" principle. A
+    blocking (critical/high severity) finding must fail the pipeline at
+    that step rather than let the mission launch anyway."""
     test_output = '''
 ```python
 # REQ-001
@@ -630,23 +674,25 @@ def test_req_001_uses_live_prototype():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=_FakeProtectedBackendDeploymentService(),  # type: ignore[arg-type]
         frontend_deployment_service=_FakeProtectedFrontendDeploymentService(),  # type: ignore[arg-type]
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=security_scan_service,  # type: ignore[arg-type]
         build_workspace_root=tmp_path,
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
-    assert run.status == "completed"
-    assert run.launch_url == run.frontend_url
-    assert security_scan_service.calls == 0
-    assert [step.step_id for step in run.steps][-2:] == [
-        "execute-test-suite",
-        "launch-mission",
-    ]
+    assert run.status == "failed"
+    assert security_scan_service.calls == 1
+    scan_step = next(step for step in run.steps if step.step_id == "run-security-scan")
+    assert scan_step.status == "failed"
+    assert scan_step.error == "simulated blocking finding"
+    # Blocked at the scan step - launch-mission must never have run.
+    assert all(step.status != "completed" for step in run.steps if step.step_id == "launch-mission")
 
 
 class _ModelRecordingMissionAgentService(NullMissionAgentProvisioningService):
@@ -690,13 +736,15 @@ async def test_provisioning_uses_the_landing_page_approved_model(tmp_path: Path)
         mission_agent_provisioning_service=provisioning_service,
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -717,13 +765,15 @@ async def test_provisioning_falls_back_to_default_model_when_no_scope_was_select
         mission_agent_provisioning_service=provisioning_service,
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -777,12 +827,14 @@ def test_req_001_uses_live_prototype():
         mission_agent_provisioning_service=_RecordingMissionAgentService(delete_events),
         backend_deployment_service=_FakeProtectedBackendDeploymentService(delete_events),  # type: ignore[arg-type]
         frontend_deployment_service=_FakeProtectedFrontendDeploymentService(delete_events),  # type: ignore[arg-type]
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
     )
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
     mission_slug = f"acme-mission-{run.id[:8]}"
@@ -821,6 +873,7 @@ async def test_start_self_heals_incomplete_build_solution_with_safe_policy_defau
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -828,7 +881,8 @@ async def test_start_self_heals_incomplete_build_solution_with_safe_policy_defau
 
     # First call: build-solution isn't complete yet, so the self-heal path
     # resumes it (with the safe overrides) BEFORE the pipeline steps run.
-    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1")
+    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1")
     run = await service.wait_for_run(run.id)
 
     assert len(orchestrator.resume_calls) == 1
@@ -842,7 +896,8 @@ async def test_start_self_heals_incomplete_build_solution_with_safe_policy_defau
     # complete (the fake applied it during the first resume), so no
     # further resume call is made - an already-completed build must never
     # be re-triggered.
-    run2 = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1")
+    run2 = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1")
     run2 = await service.wait_for_run(run2.id)
 
     assert run2.status == "completed"
@@ -892,12 +947,14 @@ async def test_start_uses_shared_memory_output_without_waiting_for_official_step
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
     )
 
-    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1")
+    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1")
     run = await service.wait_for_run(run.id)
 
     assert orchestrator.resume_calls == []
@@ -925,12 +982,14 @@ async def test_start_fails_closed_with_actionable_error_when_stuck_on_earlier_ga
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
     )
 
-    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1")
+    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1")
     run = await service.wait_for_run(run.id)
 
     assert len(orchestrator.resume_calls) == 1
@@ -948,7 +1007,8 @@ async def test_start_fails_closed_with_actionable_error_when_stuck_on_earlier_ga
 async def test_pipeline_launches_with_visible_warning_when_generated_tests_fail(tmp_path: Path):
     service = _build_service(test_output_text=_FAILING_TEST_OUTPUT, tmp_path=tmp_path)
 
-    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1")
+    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1")
     run = await service.wait_for_run(run.id)
 
     assert run.status == "completed"
@@ -980,6 +1040,7 @@ def test_search_documents():
         session_id="session-1",
         requesting_user_id="user-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1020,6 +1081,7 @@ async def test_pipeline_launches_at_ninety_percent_and_preserves_requirement_gap
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1028,7 +1090,8 @@ async def test_pipeline_launches_at_ninety_percent_and_preserves_requirement_gap
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1089,6 +1152,7 @@ def test_goal_req_001_delivers_approved_outcome():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1097,7 +1161,8 @@ def test_goal_req_001_delivers_approved_outcome():
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1173,6 +1238,7 @@ def test_req_002_exports_a_report():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1180,7 +1246,8 @@ def test_req_002_exports_a_report():
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1238,6 +1305,7 @@ def test_req_001_processes_every_document():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1248,6 +1316,7 @@ def test_req_001_processes_every_document():
         session_id="session-1",
         requesting_user_id="user-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1282,6 +1351,7 @@ async def test_pipeline_repairs_invalid_generated_ui_before_provisioning(
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1292,6 +1362,7 @@ async def test_pipeline_repairs_invalid_generated_ui_before_provisioning(
         session_id="session-1",
         requesting_user_id="user-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1326,6 +1397,7 @@ def test_req_001_processes_every_document():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1336,6 +1408,7 @@ def test_req_001_processes_every_document():
         session_id="session-1",
         requesting_user_id="user-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1374,6 +1447,7 @@ def test_req_001_processes_every_document():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=NullBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1381,7 +1455,8 @@ def test_req_001_processes_every_document():
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1407,8 +1482,12 @@ class _FakeHttpsBackendDeploymentService:
         mission_slug: str,
         build_root: Path,
         mission_identity_resource_id: str | None = None,
+        data_endpoint: str | None = None,
+        data_database_name: str | None = None,
+        data_container_name: str | None = None,
         on_progress=None,
     ) -> BackendDeploymentResult:
+        del data_endpoint, data_database_name, data_container_name
         return BackendDeploymentResult(
             image_tag=f"acr/{mission_slug}:dev",
             backend_url=f"https://{mission_slug}-backend.example.com",
@@ -1457,6 +1536,7 @@ def test_req_001_processes_every_document():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=_FakeHttpsBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1464,7 +1544,8 @@ def test_req_001_processes_every_document():
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1505,6 +1586,7 @@ def test_req_001_processes_every_document():
         mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
         backend_deployment_service=_FakeHttpsBackendDeploymentService(),
         frontend_deployment_service=NullFrontendDeploymentService(),
+        data_layer_provisioning_service=NullDataLayerProvisioningService(),
         test_execution_service=TestExecutionService(timeout_seconds=60),
         security_scan_service=SecurityScanService(timeout_seconds=60),
         build_workspace_root=tmp_path,
@@ -1512,7 +1594,8 @@ def test_req_001_processes_every_document():
     )
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1538,7 +1621,8 @@ async def test_start_returns_a_visible_running_run_before_any_slow_lookup_happen
     silently happening in the background."""
     service = _build_service(test_output_text=_PASSING_TEST_OUTPUT, tmp_path=tmp_path)
 
-    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1")
+    run = await service.start(session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1")
 
     assert run.status == "running"
     assert all(step.status == "pending" for step in run.steps)
@@ -1556,7 +1640,8 @@ async def test_start_fails_the_run_visibly_when_the_workflow_run_is_unknown(tmp_
     service = _build_service(test_output_text=_PASSING_TEST_OUTPUT, tmp_path=tmp_path)
 
     run = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="does-not-exist"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="does-not-exist",
+        approval_request_id="session-1:does-not-exist"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1581,8 +1666,12 @@ class _FailOnceThenSucceedBackendDeploymentService:
         mission_slug: str,
         build_root: Path,
         mission_identity_resource_id: str | None = None,
+        data_endpoint: str | None = None,
+        data_database_name: str | None = None,
+        data_container_name: str | None = None,
         on_progress=None,
     ) -> BackendDeploymentResult:
+        del data_endpoint, data_database_name, data_container_name
         self.call_count += 1
         if self.call_count == 1:
             raise BackendDeploymentError("Simulated ACR build failure.")
@@ -1614,7 +1703,8 @@ async def test_retry_from_a_failed_step_reuses_the_same_run_and_its_prior_artifa
     )
 
     first_attempt = await service.start(
-        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1"
+        session_id="session-1", requesting_user_id="user-1", workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     first_attempt = await service.wait_for_run(first_attempt.id)
 
@@ -1690,6 +1780,7 @@ async def test_completed_prototype_inventory_rehydrates_after_restart(tmp_path: 
         requesting_tenant_id="tenant-1",
         requesting_object_id="object-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
 
@@ -1788,6 +1879,7 @@ async def test_owner_cannot_exceed_active_prototype_limit(tmp_path: Path):
         session_id="session-1",
         requesting_user_id="tenant-1:object-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     await service.wait_for_run(first.id)
 
@@ -1796,6 +1888,7 @@ async def test_owner_cannot_exceed_active_prototype_limit(tmp_path: Path):
             session_id="session-2",
             requesting_user_id="tenant-1:object-1",
             workflow_run_id="run-1",
+            approval_request_id="session-2:run-1"
         )
 
 
@@ -1807,6 +1900,7 @@ async def test_owner_can_create_multiple_active_prototypes_when_limit_is_disable
         session_id="session-1",
         requesting_user_id="tenant-1:object-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     await service.wait_for_run(first.id)
 
@@ -1814,6 +1908,7 @@ async def test_owner_can_create_multiple_active_prototypes_when_limit_is_disable
         session_id="session-2",
         requesting_user_id="tenant-1:object-1",
         workflow_run_id="run-1",
+        approval_request_id="session-2:run-1"
     )
     await service.wait_for_run(second.id)
 
@@ -1832,6 +1927,7 @@ async def test_cleanup_expired_deletes_terminal_prototype(tmp_path: Path):
         session_id="session-1",
         requesting_user_id="tenant-1:object-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
     run.expires_at = datetime.now(UTC) - timedelta(seconds=1)
@@ -1862,6 +1958,7 @@ async def test_cleanup_failure_remains_in_inventory_for_retry(tmp_path: Path):
         session_id="session-1",
         requesting_user_id="tenant-1:object-1",
         workflow_run_id="run-1",
+        approval_request_id="session-1:run-1"
     )
     run = await service.wait_for_run(run.id)
     run.expires_at = datetime.now(UTC) - timedelta(seconds=1)

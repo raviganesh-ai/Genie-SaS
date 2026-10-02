@@ -43,6 +43,16 @@ directly, each isolating that SDK behind its own interface:
   that happens to mention ``azure.ai.projects``/``azure.identity`` import
   lines as plain text. Allow-listed here to avoid a false positive rather
   than obfuscating the generated template's own real import lines.
+- ``app/main.py`` owns one ``DefaultAzureCredential`` used to authenticate
+  real evidence-search clients it constructs at startup - the application's
+  composition root, not a business-logic module, so it's expected to wire
+  together every access-layer credential it needs.
+- ``app/deploy_launch/data_layer_provisioning_service.py`` owns the
+  ResourceManagementClient / DefaultAzureCredential lifecycle for real
+  per-mission Cosmos DB data-layer provisioning and schema validation.
+- ``app/production_promotion/service.py`` owns the
+  ContainerAppsAPIClient / DefaultAzureCredential lifecycle for real
+  canary-weight cutover and health-gated production promotion.
 
 Every other module must depend only on those protocols, never on the SDK
 directly. This test fails closed if that boundary is ever violated.
@@ -70,6 +80,9 @@ _ALLOWED_RELATIVE_PATHS = {
     Path("deploy_launch/container_app_frontend_deployment_service.py"),
     Path("deploy_launch/code_materializer.py"),
     Path("deploy_launch/mission_identity_service.py"),
+    Path("main.py"),
+    Path("deploy_launch/data_layer_provisioning_service.py"),
+    Path("production_promotion/service.py"),
 }
 
 

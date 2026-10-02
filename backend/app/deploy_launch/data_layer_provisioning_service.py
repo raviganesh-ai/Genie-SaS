@@ -315,6 +315,45 @@ class UnavailableDataLayerProvisioningService:
         raise DataLayerProvisioningError("Mission data-layer provisioning is unavailable.")
 
 
+class NullDataLayerProvisioningService:
+    """Test double only: real behavior end-to-end minus any actual Azure
+    calls, matching NullBackendDeploymentService/NullFrontendDeploymentService
+    elsewhere in this package. Never wired into
+    create_data_layer_provisioning_service - that factory remains real-or-
+    fail-closed (see UnavailableDataLayerProvisioningService) since
+    provisioning the mission data layer is never conditionally skippable in
+    production."""
+
+    async def provision(
+        self,
+        *,
+        mission_slug: str,
+        resource_group_name: str,
+        identity_principal_id: str,
+    ) -> DataLayerProvisioningResult:
+        del resource_group_name, identity_principal_id
+        account_name = self._account_name(mission_slug)
+        return DataLayerProvisioningResult(
+            account_name=account_name,
+            endpoint=f"https://{account_name}.documents.azure.com:443/",
+            database_name="mission-data",
+            container_name="mission-items",
+            container_resource_id=(
+                f"local/{mission_slug}/mission-data/mission-items"
+            ),
+            schema_version="1.0.0",
+        )
+
+    async def validate_schema(
+        self, *, result: DataLayerProvisioningResult
+    ) -> DataLayerProvisioningResult:
+        return result
+
+    @staticmethod
+    def _account_name(mission_slug: str) -> str:
+        return f"local-{mission_slug}"
+
+
 def create_data_layer_provisioning_service(
     *, subscription_id: str | None, location: str | None
 ) -> DataLayerProvisioner:

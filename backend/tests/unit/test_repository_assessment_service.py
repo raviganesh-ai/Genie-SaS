@@ -14,6 +14,7 @@ from app.agents.gateway import AgentGatewayError
 from app.agents.models import AgentExecutionResult
 from app.repository_assessment.repository import InMemoryRepositoryAssessmentRepository
 from app.repository_assessment.service import RepositoryAssessmentError, RepositoryAssessmentService
+from app.repository_connections.github_mcp_client import GitHubMcpError
 from app.repository_connections.models import RepositoryPurposeBinding
 from app.repository_connections.repository import InMemoryRepositoryBindingRepository
 
@@ -612,3 +613,108 @@ async def test_ask_rejects_an_assessment_id_from_a_different_session(
             message="What does this repository do?",
             trace_id="trace-2",
         )
+
+
+class _FlakyGitHubMcpClient:
+    """Mirrors `_FakeGitHubMcpClient`'s layout, but one named file's
+    `get_file_contents` call fails a configurable number of times before
+    succeeding (or always fails, if `fail_count` exceeds the retry budget)
+    - simulating the real, observed GitHub MCP behavior of a transient
+    failure on an otherwise well-formed, previously-successful request."""
+
+    endpoint = "https://github.example.test/mcp"
+
+    def __init__(self, *, flaky_path: str, fail_count: int) -> None:
+        self._flaky_path = flaky_path
+        self._fail_count = fail_count
+        self.attempts_for_flaky_path = 0
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        assert name == "get_file_contents"
+        path = arguments["path"]
+        if path == self._flaky_path:
+            self.attempts_for_flaky_path += 1
+            if self.attempts_for_flaky_path <= self._fail_count:
+                raise GitHubMcpError("Simulated transient GitHub MCP failure.")
+        if path == "":
+            return _mcp_result(
+                [
+                    {"path": "README.md", "type": "file"},
+                    {"path": "frontend", "type": "dir"},
+                    {"path": "backend", "type": "dir"},
+                ]
+            )
+        if path == "frontend":
+            return _mcp_result(
+                [
+                    {"path": "frontend/app.tsx", "type": "file"},
+                    {"path": "frontend/package.json", "type": "file"},
+                ]
+            )
+        if path == "backend":
+            return _mcp_result(
+                [
+                    {"path": "backend/main.py", "type": "file"},
+                    {"path": "backend/requirements.txt", "type": "file"},
+                ]
+            )
+        if path in _FILES:
+            return _mcp_file_result(_FILES[path])
+        raise AssertionError(f"Unexpected path: {path}")
+
+
+def _service_with_flaky_client(
+    binding_repository: InMemoryRepositoryBindingRepository, *, client: Any
+) -> RepositoryAssessmentService:
+    return RepositoryAssessmentService(
+        client=client,
+        binding_repository=binding_repository,
+        assessment_repository=InMemoryRepositoryAssessmentRepository(),
+        session_service=_FakeSessionService(),  # type: ignore[arg-type]
+        governance_service=_FakeGovernanceService(),  # type: ignore[arg-type]
+        max_files=100,
+        max_depth=10,
+        max_source_bytes=1_000_000,
+        orchestrator=None,
+    )
+
+
+async def test_assess_recovers_from_a_transient_single_file_read_failure(
+    seeded_binding_repository: InMemoryRepositoryBindingRepository,
+) -> None:
+    client = _FlakyGitHubMcpClient(flaky_path="backend/main.py", fail_count=1)
+    service = _service_with_flaky_client(seeded_binding_repository, client=client)
+
+    assessment = await service.assess(
+        session_id="session-1",
+        binding_id="binding-1",
+        requesting_user_id="user-1",
+        trace_id="trace-1",
+    )
+
+    # Succeeded on retry - no coverage gap, and the file was still analyzed.
+    assert assessment.coverage_gaps == []
+    assert any(node.name == "main.py" for node in assessment.nodes)
+    assert client.attempts_for_flaky_path == 2
+
+
+async def test_assess_records_a_gap_and_continues_when_one_file_persistently_fails(
+    seeded_binding_repository: InMemoryRepositoryBindingRepository,
+) -> None:
+    client = _FlakyGitHubMcpClient(flaky_path="backend/main.py", fail_count=10)
+    service = _service_with_flaky_client(seeded_binding_repository, client=client)
+
+    assessment = await service.assess(
+        session_id="session-1",
+        binding_id="binding-1",
+        requesting_user_id="user-1",
+        trace_id="trace-1",
+    )
+
+    # The whole assessment must still complete - one persistently
+    # unreadable file is recorded as a gap, never a fatal error that
+    # discards every other file already (or still to be) analyzed.
+    assert any(gap.category == "unreadable_content" for gap in assessment.coverage_gaps)
+    assert not any(node.name == "main.py" for node in assessment.nodes)
+    # The rest of the repository was still analyzed normally.
+    assert any(node.name == "app.tsx" for node in assessment.nodes)
