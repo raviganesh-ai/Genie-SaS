@@ -20,10 +20,12 @@ import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
 import { platformConfigApi } from "@/services/platformConfigApi";
 import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
+import { standardsApi } from "@/services/standardsApi";
 import { useSessionContext } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
 import type { ModernizationCapability, ModernizationPlan } from "@/types/modernization";
 import type { RepositoryAssessment, RepositoryPurposeBinding } from "@/types/repositoryConnection";
+import type { ArchitectureReferenceSnapshot, StandardsSnapshot } from "@/types/standards";
 
 /** Capabilities whose target is a bounded, well-known set of Azure
  * services rather than open-ended free text - offering these as a
@@ -126,9 +128,43 @@ export function ModernizationPage(): JSX.Element {
     }
   }, [sessionId]);
 
+  const [sessionArchitectureSnapshot, setSessionArchitectureSnapshot] =
+    useState<ArchitectureReferenceSnapshot | null>(null);
+  const [sessionStandardsSnapshot, setSessionStandardsSnapshot] = useState<StandardsSnapshot | null>(null);
+
+  const loadSessionOverrides = useCallback(async () => {
+    if (!sessionId) return;
+    // Independent of `load()` above (never bundled into its Promise.all,
+    // and never able to block it) - a session-specific override is
+    // supplementary context on top of the platform default, not required
+    // for the page to function; see Repository evidence's identical
+    // override feature for where these are created.
+    try {
+      const [archSnapshots, stdSnapshots] = await Promise.all([
+        standardsApi.listArchitectureReferenceSnapshots(sessionId),
+        standardsApi.listStandardsSnapshots(sessionId),
+      ]);
+      const latestArch = [...archSnapshots].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )[0];
+      const latestStd = [...stdSnapshots].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )[0];
+      setSessionArchitectureSnapshot(latestArch ?? null);
+      setSessionStandardsSnapshot(latestStd ?? null);
+    } catch {
+      setSessionArchitectureSnapshot(null);
+      setSessionStandardsSnapshot(null);
+    }
+  }, [sessionId]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadSessionOverrides();
+  }, [loadSessionOverrides]);
 
   const generate = useCallback(async () => {
     const capability = capabilities.find((item) => item.id === capabilityId);
@@ -145,13 +181,16 @@ export function ModernizationPage(): JSX.Element {
       const plan = await modernizationApi.generate(sessionId, {
         binding_id: bindingId,
         assessment_id: assessmentId,
-        // Architecture/standards references are configured once at the
-        // platform level (see /configure) and applied automatically on
-        // the backend - there is no session-level override anymore.
-        standards_snapshot_id: null,
+        // A session-specific override (see Repository evidence's "Use a
+        // different reference for this mission") takes precedence when
+        // present; otherwise null correctly falls back to whatever is
+        // configured at the platform level (see /configure) - this is
+        // never a silent swap, the banner below always shows which one
+        // is actually in effect.
+        standards_snapshot_id: sessionStandardsSnapshot?.id ?? null,
         capability_id: capability.id,
         target: capability.target_label ? target.trim() : null,
-        architecture_reference_snapshot_id: null,
+        architecture_reference_snapshot_id: sessionArchitectureSnapshot?.id ?? null,
       });
       setPlans((current) => [plan, ...current]);
     } catch (err) {
@@ -166,6 +205,8 @@ export function ModernizationPage(): JSX.Element {
     capabilities,
     capabilityId,
     target,
+    sessionArchitectureSnapshot,
+    sessionStandardsSnapshot,
   ]);
 
   const execute = useCallback(
@@ -245,21 +286,33 @@ export function ModernizationPage(): JSX.Element {
         ) : null}
         <Field
           label="Standards and architecture reference"
-          hint="Configured once for the whole platform in ⚙️ Configure - applied automatically to every plan unless that page has none set."
+          hint="Configured once for the whole platform in ⚙️ Configure, or overridden per-mission on Repository evidence - this plan always uses whichever is shown below."
         >
-          <MessageBar intent={platformArchitectureCount || platformStandardsCount ? "success" : "info"}>
+          <MessageBar intent={sessionArchitectureSnapshot || platformArchitectureCount ? "success" : "info"}>
             <MessageBarBody>
-              {platformArchitectureCount ? (
+              {sessionArchitectureSnapshot ? (
                 <Text block>
-                  Using {platformArchitectureCount} configured architecture reference
+                  Using your own architecture reference for this mission -{" "}
+                  {sessionArchitectureSnapshot.repository_full_name} - instead of{" "}
+                  {platformArchitectureCount ? `the ${platformArchitectureCount} platform-configured repositor${platformArchitectureCount === 1 ? "y" : "ies"}` : "the platform default"}.
+                </Text>
+              ) : platformArchitectureCount ? (
+                <Text block>
+                  Using {platformArchitectureCount} platform-configured architecture reference
                   repositor{platformArchitectureCount === 1 ? "y" : "ies"}.
                 </Text>
               ) : (
                 <Text block>No architecture reference configured - Genie will apply its own best-practice judgment.</Text>
               )}
-              {platformStandardsCount ? (
+              {sessionStandardsSnapshot ? (
                 <Text block>
-                  Using {platformStandardsCount} configured standards repositor
+                  Using your own standards reference for this mission -{" "}
+                  {sessionStandardsSnapshot.repository_full_name} - instead of{" "}
+                  {platformStandardsCount ? `the ${platformStandardsCount} platform-configured repositor${platformStandardsCount === 1 ? "y" : "ies"}` : "the platform default"}.
+                </Text>
+              ) : platformStandardsCount ? (
+                <Text block>
+                  Using {platformStandardsCount} platform-configured standards repositor
                   {platformStandardsCount === 1 ? "y" : "ies"}.
                 </Text>
               ) : (

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { DependencyMappingPage } from "@/features/dependency-mapping/DependencyMappingPage";
 import { mockFetchSequence, renderWithProviders } from "./testUtils";
 import { FIXTURE_SESSION_ID } from "./fixtures";
@@ -40,7 +41,37 @@ const ASSESSMENT = {
   nodes: [],
   edges: [],
   coverage_gaps: [],
+  code_summary: null,
   created_at: "2026-01-01T00:00:00Z",
+};
+
+const ASSESSMENT_WITH_SUMMARY = {
+  ...ASSESSMENT,
+  nodes: [
+    {
+      id: "component:1",
+      type: "component",
+      name: "backend",
+      version: null,
+      path: "backend",
+      attributes: {},
+    },
+  ],
+  code_summary: {
+    summary: "This repository implements a FastAPI backend service.",
+    highlights: ["Uses FastAPI", "Exposes one webhook endpoint"],
+    component_roles: [
+      {
+        component_id: "component:1",
+        component_path: "backend",
+        role: "API layer",
+        confidence: 0.85,
+        rationale: "Contains a FastAPI app.",
+      },
+    ],
+    generated_by: "code-analyst",
+    generated_at: "2026-01-01T00:00:00Z",
+  },
 };
 
 describe("DependencyMappingPage", () => {
@@ -86,6 +117,75 @@ describe("DependencyMappingPage", () => {
         ),
       );
       expect(createCall).toBeUndefined();
+    });
+  });
+
+  it("shows the Genie-generated code summary and component role when present", async () => {
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [BINDING] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [ASSESSMENT_WITH_SUMMARY] },
+    ]);
+
+    renderWithProviders(<DependencyMappingPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(
+      await screen.findByText("This repository implements a FastAPI backend service."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Uses FastAPI")).toBeInTheDocument();
+    expect(screen.getByText("API layer")).toBeInTheDocument();
+    expect(screen.getAllByText("backend").length).toBeGreaterThan(0);
+  });
+
+  it("does not render a code summary card when the assessment has none", async () => {
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [BINDING] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [ASSESSMENT] },
+    ]);
+
+    renderWithProviders(<DependencyMappingPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Commit pinned")).toBeInTheDocument();
+    expect(screen.queryByText("Code summary")).not.toBeInTheDocument();
+  });
+
+  it("lets the user ask a question about the analyzed repository once code analysis is done", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [BINDING] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [ASSESSMENT] },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments/assessment-1/ask`,
+        response: {
+          question: "What does the backend depend on?",
+          answer: "The backend component declares a dependency on fastapi.",
+          referenced_paths: ["backend", "backend/main.py"],
+          generated_by: "code-analyst",
+          generated_at: "2026-01-02T00:00:00Z",
+        },
+      },
+    ]);
+
+    renderWithProviders(<DependencyMappingPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Ask about this repository")).toBeInTheDocument();
+    const input = screen.getByPlaceholderText(/What does the backend component depend on/i);
+    await user.type(input, "What does the backend depend on?");
+    await user.click(screen.getByRole("button", { name: /^Ask Genie$/ }));
+
+    expect(
+      await screen.findByText("The backend component declares a dependency on fastapi."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("backend/main.py")).toBeInTheDocument();
+
+    const askCall = fetchMock.mock.calls.find(([input]) =>
+      new URL(input.toString()).pathname.endsWith(
+        `/sessions/${FIXTURE_SESSION_ID}/repository-assessments/assessment-1/ask`,
+      ),
+    );
+    expect(askCall).toBeDefined();
+    const [, askInit] = askCall as unknown as [string, RequestInit];
+    expect(JSON.parse(askInit.body as string)).toEqual({
+      message: "What does the backend depend on?",
     });
   });
 });

@@ -167,6 +167,59 @@ agents:
     prompt_template_ref: test-generation-v1
     enabled: true
 
+  - id: code-analyst
+    name: Code Analyst
+    role: code_comprehension
+    description: >-
+      Reads the deterministic, commit-pinned dependency/component graph
+      RepositoryAssessmentService already built from an approved
+      repository (never raw file contents directly) and produces a
+      grounded plain-language summary plus a per-component architectural-
+      role classification (e.g. UI layer, API layer, data layer), so a
+      user exploring an unfamiliar codebase gets both "what this code
+      does" and "how it's structured" without the model inventing files,
+      dependencies, or components the deterministic analyzers did not
+      already find. No model_deployment_ref override - intentionally
+      cost-conservative on the platform default LLM.
+    capabilities:
+      - code_summarization
+      - component_role_classification
+    allowed_tools: []
+    memory_access:
+      - personal
+      - shared
+    foundry_agent_id: code-analyst
+    owner: dependency-mapping-team
+    governance_policy_id: standard-governance-policy-v1
+    prompt_template_ref: repository-code-summary-v1
+    enabled: true
+
+  - id: well-architected-advisor
+    name: Well-Architected Advisor
+    role: architecture_guidance
+    description: >-
+      Answers Azure Well-Architected Framework pillar questions (
+      Reliability, Security, Cost Optimization, Operational Excellence,
+      Performance Efficiency) and Azure service-level questions strictly
+      from real Microsoft Learn documents retrieved live, at question
+      time, via the public Microsoft Learn MCP server - never from its
+      own trained knowledge alone. WellArchitectedQaService additionally
+      discards any citation that does not match a real retrieved URL, so
+      a hallucinated citation can never reach the user. No
+      model_deployment_ref override - intentionally cost-conservative on
+      the platform default LLM.
+    capabilities:
+      - well_architected_assessment
+      - grounded_microsoft_docs_qa
+    allowed_tools: []
+    memory_access:
+      - shared
+    foundry_agent_id: well-architected-advisor
+    owner: architecture-team
+    governance_policy_id: standard-governance-policy-v1
+    prompt_template_ref: well-architected-qa-v1
+    enabled: true
+
   - id: genie-orchestrator
     name: Genie Orchestrator
     role: mission_orchestration

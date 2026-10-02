@@ -707,4 +707,105 @@ describe("DiscoveryPage", () => {
       message: "What if we minimized cost with a serverless approach?",
     });
   });
+
+  it("answers a Well-Architected/Azure docs question with real citations, grounded only in retrieved evidence", async () => {
+    const existingSolution = {
+      id: "solution-1",
+      name: "Intelligent document processing",
+      summary: "A managed Azure architecture for secure document intake and analysis.",
+      requirements_text: "Process uploaded documents securely.",
+      architecture_text: "Static Web Apps connects to API Management and Azure AI Foundry.",
+      architecture_nodes: [],
+      architecture_edges: [],
+      pros: [],
+      cons: [],
+      ai_feasibility: "recommended",
+      ai_feasibility_rationale: "The workflow maps to managed Azure AI capabilities.",
+      evidence_references: [],
+      pricing_queries: [],
+      cost_estimate: {
+        currency_code: "USD",
+        region: "eastus",
+        monthly_amount: 125,
+        annual_amount: 1500,
+        coverage: "partial",
+        assumptions: [],
+        source_urls: [],
+        retrieved_at: "2026-09-12T10:00:00Z",
+      },
+    };
+    const baseCase = {
+      id: "discovery-1",
+      session_id: "session-1",
+      owner_user_id: "user-1",
+      save_enabled: false,
+      model_deployment_ref: "gpt-5-mini",
+      status: "awaiting_solution_selection",
+      source_upload_ids: ["upload-1"],
+      analyzed_upload_ids: ["upload-1"],
+      analysis_revision: 1,
+      personas: [],
+      selected_persona_id: null,
+      selected_persona_ids: [],
+      deep_dive_findings: [],
+      insight_sections: [],
+      gap_summary: "",
+      assumption_summary: "",
+      gap_analysis: null,
+      qa_mode: null,
+      questions: [],
+      proposed_solutions: [existingSolution],
+      selected_solution_id: null,
+      build_workflow_run_id: null,
+      last_error: null,
+      version: 4,
+      created_at: "2026-09-12T10:00:00Z",
+      updated_at: "2026-09-12T10:02:00Z",
+    };
+    const fetchMock = mockFetchSequence([
+      { match: "/sessions/session-1/discovery", response: baseCase },
+      { match: "/sessions/session-1/uploads", response: [] },
+      {
+        match: "/sessions/session-1/well-architected/ask",
+        response: {
+          question: "How reliable is Azure Cosmos DB?",
+          answer: "Azure Cosmos DB offers a 99.999% availability SLA when configured for multi-region writes.",
+          citations: [
+            {
+              title: "Overview of the reliability pillar",
+              url: "https://learn.microsoft.com/azure/well-architected/reliability",
+              excerpt: "The reliability pillar focuses on consistent, resilient workloads.",
+            },
+          ],
+          grounded: true,
+          generated_by: "well-architected-advisor",
+          generated_at: "2026-09-12T10:05:00Z",
+        },
+      },
+    ]);
+
+    renderWithProviders(<DiscoveryPage />, { sessionId: "session-1" });
+
+    expect(await screen.findByText("Ask about Well-Architected pillars & Azure docs")).toBeInTheDocument();
+    const input = screen.getByPlaceholderText(/How reliable is Azure Cosmos DB/i);
+    await userEvent.setup().type(input, "How reliable is Azure Cosmos DB?");
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Ask Genie$/ }));
+
+    expect(
+      await screen.findByText(/99\.999% availability SLA when configured for multi-region writes/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Overview of the reliability pillar" })).toHaveAttribute(
+      "href",
+      "https://learn.microsoft.com/azure/well-architected/reliability",
+    );
+
+    const askCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).endsWith("/well-architected/ask"),
+    );
+    expect(askCall).toBeDefined();
+    const [, askInit] = askCall as unknown as [string, RequestInit];
+    expect(JSON.parse(askInit.body as string)).toEqual({
+      question: "How reliable is Azure Cosmos DB?",
+    });
+  });
 });

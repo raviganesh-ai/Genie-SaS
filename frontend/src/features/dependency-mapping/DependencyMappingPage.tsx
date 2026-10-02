@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Dropdown,
+  Input,
   MessageBar,
   MessageBarBody,
   MessageBarTitle,
@@ -28,6 +29,7 @@ import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
 import { useSessionContext } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
 import type {
+  DependencyEdgeType,
   DependencyNodeType,
   RepositoryAssessment,
   RepositoryPurposeBinding,
@@ -35,19 +37,40 @@ import type {
 
 const NODE_COLORS: Record<DependencyNodeType, string> = {
   repository: "#2f83e0",
+  component: "#5a7fb8",
   manifest: "#8a63d2",
   source_file: "#3fa66a",
   package: "#d99a2b",
+  technology: "#2bb3a3",
   integration_endpoint: "#d35f5f",
+};
+
+// "depends_on" is the heuristic, cross-component intra-repository
+// interdependency edge (RepositoryAssessmentService._resolve_local_dependencies)
+// - given its own distinct, animated color so real code interdependencies
+// stand out from purely structural "contains"/"built_on" edges.
+const EDGE_STROKE_COLORS: Partial<Record<DependencyEdgeType, string>> = {
+  integrates_with: "#d35f5f",
+  depends_on: "#c77dff",
 };
 
 const NODE_COLUMNS: Record<DependencyNodeType, number> = {
   repository: 0,
-  manifest: 1,
-  source_file: 1,
-  package: 2,
-  integration_endpoint: 2,
+  component: 1,
+  manifest: 2,
+  source_file: 2,
+  package: 3,
+  technology: 3,
+  integration_endpoint: 4,
 };
+
+interface RepositoryChatMessage {
+  id: string;
+  role: "user" | "genie";
+  text: string;
+  referencedPaths?: string[];
+}
+
 
 export function DependencyMappingPage(): JSX.Element {
   const navigate = useNavigate();
@@ -59,6 +82,10 @@ export function DependencyMappingPage(): JSX.Element {
   const [running, setRunning] = useState(false);
   const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
   const [error, setError] = useState<SafeError | null>(null);
+  const [chatMessages, setChatMessages] = useState<RepositoryChatMessage[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatAsking, setChatAsking] = useState(false);
+  const [chatError, setChatError] = useState<SafeError | null>(null);
 
   const runAssessmentFor = useCallback(
     async (bindingId: string) => {
@@ -66,6 +93,7 @@ export function DependencyMappingPage(): JSX.Element {
       setRunning(true);
       setRunStartedAt(new Date().toISOString());
       setError(null);
+      setChatMessages([]);
       try {
         setAssessment(await repositoryConnectionApi.createAssessment(sessionId, bindingId));
       } catch (err) {
@@ -79,6 +107,31 @@ export function DependencyMappingPage(): JSX.Element {
     },
     [sessionId],
   );
+
+  const handleAskRepository = useCallback(async () => {
+    const message = chatDraft.trim();
+    if (!sessionId || !assessment || !message || chatAsking) return;
+    setChatMessages((current) => [...current, { id: `${Date.now()}-user`, role: "user", text: message }]);
+    setChatDraft("");
+    setChatError(null);
+    setChatAsking(true);
+    try {
+      const result = await repositoryConnectionApi.askAboutAssessment(sessionId, assessment.id, message);
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}-genie`,
+          role: "genie",
+          text: result.answer,
+          referencedPaths: result.referenced_paths,
+        },
+      ]);
+    } catch (caught) {
+      setChatError(caught instanceof ApiError ? caught : { message: "Unable to answer that question." });
+    } finally {
+      setChatAsking(false);
+    }
+  }, [sessionId, assessment, chatDraft, chatAsking]);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -150,8 +203,8 @@ export function DependencyMappingPage(): JSX.Element {
       source: edge.source,
       target: edge.target,
       label: `${edge.type} (${Math.round(edge.confidence * 100)}%)`,
-      animated: edge.type === "integrates_with",
-      style: { stroke: edge.type === "integrates_with" ? "#d35f5f" : "#6f7b8a" },
+      animated: edge.type === "integrates_with" || edge.type === "depends_on",
+      style: { stroke: EDGE_STROKE_COLORS[edge.type] ?? "#6f7b8a" },
       labelStyle: { fill: "#c8d0da", fontSize: 10 },
     }));
     return { nodes, edges };
@@ -213,6 +266,35 @@ export function DependencyMappingPage(): JSX.Element {
             <Card><Text weight="semibold">{assessment.nodes.length}</Text><Text>Graph nodes</Text></Card>
             <Card><Text weight="semibold">{assessment.edges.length}</Text><Text>Evidence edges</Text></Card>
           </div>
+          {assessment.code_summary ? (
+            <Card className="repository-intake-card code-summary-card">
+              <div className="dependency-mapping-heading">
+                <Text weight="semibold">Code summary</Text>
+                <Badge color="informative" appearance="tint">Genie-generated - verify before relying on it</Badge>
+              </div>
+              <Text block>{assessment.code_summary.summary}</Text>
+              {assessment.code_summary.highlights.length > 0 ? (
+                <ul className="code-summary-highlights">
+                  {assessment.code_summary.highlights.map((highlight, index) => (
+                    <li key={index}>{highlight}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {assessment.code_summary.component_roles.length > 0 ? (
+                <div className="code-summary-roles">
+                  {assessment.code_summary.component_roles.map((role) => (
+                    <div key={role.component_id} className="code-summary-role-row">
+                      <Badge appearance="outline">{role.component_path}</Badge>
+                      <Text weight="semibold">{role.role}</Text>
+                      <Text size={200} style={{ opacity: 0.72 }}>
+                        {Math.round(role.confidence * 100)}% confidence - {role.rationale}
+                      </Text>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </Card>
+          ) : null}
           <Card className="repository-intake-card">
             <div className="dependency-mapping-heading">
               <div>
@@ -248,6 +330,57 @@ export function DependencyMappingPage(): JSX.Element {
                 </MessageBar>
               ))
             )}
+          </Card>
+          <Card className="repository-intake-card dependency-chat-card">
+            <div>
+              <Text weight="semibold">Ask about this repository</Text>
+              <Text size={200} className="dependency-chat-hint" style={{ display: "block", opacity: 0.72 }}>
+                Ask anything about the analyzed repository - its components, dependencies,
+                technologies, or integration points. Genie answers only from the graph above,
+                not from general knowledge, and cites the specific files or components it relied on.
+              </Text>
+            </div>
+            {chatMessages.length > 0 ? (
+              <ul className="dependency-chat-log">
+                {chatMessages.map((item) => (
+                  <li key={item.id} className={`dependency-chat-message dependency-chat-message-${item.role}`}>
+                    <Text size={200} weight="semibold">{item.role === "user" ? "You" : "Genie"}</Text>
+                    <Text size={200}>{item.text}</Text>
+                    {item.role === "genie" && item.referencedPaths && item.referencedPaths.length > 0 ? (
+                      <div className="dependency-chat-references">
+                        {item.referencedPaths.map((path) => (
+                          <Badge key={path} appearance="outline" size="small">{path}</Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {chatError ? <ErrorState error={chatError} /> : null}
+            <div className="dependency-chat-row">
+              <Input
+                className="dependency-chat-input"
+                placeholder="e.g. What does the backend component depend on?"
+                value={chatDraft}
+                disabled={chatAsking}
+                onChange={(_, data) => setChatDraft(data.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleAskRepository();
+                  }
+                }}
+              />
+              <Button
+                appearance="primary"
+                disabled={chatAsking || !chatDraft.trim()}
+                onClick={() => void handleAskRepository()}
+              >
+                {chatAsking ? "Asking..." : "Ask Genie"}
+              </Button>
+            </div>
+            {chatAsking ? <Spinner size="tiny" label="Genie is reading the dependency graph..." /> : null}
           </Card>
           <Button appearance="secondary" onClick={() => navigate("/iq-collaboration")}>
             Continue to IQ Collaboration

@@ -51,11 +51,13 @@ def test_real_config_agent_registry_loads_every_catalog_agent(
 
     # requirements-analyst, architecture-designer, debugging-agent,
     # build-agent, genie-orchestrator, security-assessment-agent,
-    # test-generation-agent.
-    assert len(registry) == 7
+    # test-generation-agent, code-analyst, well-architected-advisor.
+    assert len(registry) == 9
     assert "requirements-analyst" in registry
     assert "genie-orchestrator" in registry
     assert "build-agent" in registry
+    assert "code-analyst" in registry
+    assert "well-architected-advisor" in registry
 
 
 def test_real_config_prompt_registry_resolves_every_agent_prompt_ref(

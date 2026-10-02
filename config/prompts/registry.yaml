@@ -1903,3 +1903,131 @@ prompts:
       - source_material
       - user_request
     version: "1.0.0"
+
+  - id: repository-code-summary-v1
+    name: Repository Code Summary and Component Roles
+    description: >-
+      Produces a grounded, plain-language explanation of what a commit-pinned
+      repository's code does, plus an architectural-role label for each
+      already-detected component, strictly from the deterministic evidence
+      graph supplied - never from general knowledge of similarly named
+      projects.
+    template: >-
+      RepositoryAssessmentService has already deterministically read this commit-pinned
+      repository and built a dependency and component graph - you never see raw file
+      contents, only the structured evidence below. Your job has two parts. First, write a
+      plain-language summary explaining what this codebase appears to do, in terms a person
+      unfamiliar with it can follow, grounded only in the languages, components, packages,
+      and integration endpoints listed in evidence_json - never invent a purpose, feature, or
+      technology that is not supported by that evidence, and say plainly when the evidence is
+      too sparse to describe the codebase's purpose with confidence. Second, for every entry
+      in evidence_json's components list, classify its most likely architectural role (for
+      example UI layer, API layer, data layer, infrastructure, build tooling, tests, or
+      documentation) using only its component_path, file_count, sample_paths, and
+      technologies, and explain your reasoning briefly. Return only valid JSON with exactly
+      three top-level fields: summary, highlights, and components. summary must be a single
+      plain-language paragraph between 400 and 1,500 characters. highlights must be an array
+      of at most 6 short plain-language bullet strings, each at most 160 characters,
+      surfacing the most notable technologies, components, or integration points. components
+      must be an array with exactly one entry per component in evidence_json, each containing
+      component_path (copied exactly from evidence_json, never invented or renamed),
+      role, confidence (a number from 0 to 1 reflecting how certain the classification is
+      given the limited evidence), and rationale (one short sentence citing the specific
+      file_count, sample_paths, or technologies that led to this role). Never reference a
+      component_path, package, or endpoint that is not literally present in evidence_json.
+      Keep the complete JSON response under 8,000 characters.
+
+      {retry_instruction}
+
+      Repository: {repository_full_name}
+      Commit: {commit}
+
+      Evidence (the complete, deterministic graph - the only source of truth):
+      {evidence_json}
+    variables:
+      - commit
+      - evidence_json
+      - repository_full_name
+      - retry_instruction
+    version: "1.0.0"
+
+  - id: well-architected-qa-v1
+    name: Well-Architected and Azure Docs Grounded Q&A
+    description: >-
+      Answers one Azure Well-Architected Framework pillar or Azure
+      service-level question strictly from real Microsoft Learn documents
+      retrieved live for this exact question - never from general training
+      knowledge, and never about documents not supplied in evidence_json.
+    template: >-
+      WellArchitectedQaService has already retrieved the real Microsoft Learn documents listed
+      in evidence_json below, live, specifically for this question - you have no other source
+      of truth and must not answer from general training knowledge alone. Answer the user's
+      question using only the title, url, and evidence_text fields in evidence_json. If the
+      supplied documents only partially address the question, answer what they do support and
+      explicitly say what remains uncertain or unaddressed - never fill the gap with an
+      unverified guess. If none of the supplied documents actually address the question at all,
+      say so plainly instead of answering. When the question concerns a Well-Architected pillar
+      (Reliability, Security, Cost Optimization, Operational Excellence, or Performance
+      Efficiency) or a specific Azure service's capabilities, limits, SLAs, or best practices,
+      ground every concrete claim in a specific supplied document. Return only valid JSON with
+      exactly three top-level fields: answer, grounded, and citations. answer must be a
+      plain-language response between 200 and 1,800 characters. grounded must be true only when
+      the supplied documents genuinely support the answer you gave, and false when you had to
+      say the documents do not address the question or only partially support it. citations
+      must be an array of the documents you actually relied on, each containing title and url
+      copied exactly from evidence_json - never a url that does not appear there, and never an
+      empty array when grounded is true. Keep the complete JSON response under 4,000 characters.
+
+      {retry_instruction}
+
+      Question:
+      {question}
+
+      Retrieved Microsoft Learn evidence (the only source of truth - never answer beyond it):
+      {evidence_json}
+    variables:
+      - evidence_json
+      - question
+      - retry_instruction
+    version: "1.0.0"
+
+  - id: repository-code-chat-v1
+    name: Repository Conversation Q&A
+    description: >-
+      Answers one free-text question about an already-assessed repository,
+      strictly from the deterministic dependency/component graph
+      RepositoryAssessmentService already built - never from raw file
+      contents or general knowledge of similarly named projects.
+    template: >-
+      RepositoryAssessmentService has already deterministically read this commit-pinned
+      repository and built the dependency and component graph in evidence_json below - you
+      never see raw file contents, only this structured evidence, plus prior_summary (a
+      previously generated plain-language overview of the same evidence, provided only for
+      continuity). Answer the user's question using only evidence_json and prior_summary -
+      never invent a file, component, package, technology, or integration endpoint that is not
+      literally present in evidence_json, and never answer from general knowledge of similarly
+      named projects or frameworks. If the evidence does not cover what the question asks,
+      say so plainly instead of guessing. Return only valid JSON with exactly two top-level
+      fields: answer and referenced_paths. answer must be a plain-language response between 50
+      and 1,800 characters, in the same conversational thread as prior_summary when relevant.
+      referenced_paths must be an array of the specific sample_paths or component_path values
+      from evidence_json that your answer actually relies on - never a path that is not
+      literally present there, and an empty array when no specific path is relevant. Keep the
+      complete JSON response under 3,000 characters.
+
+      {retry_instruction}
+
+      Question:
+      {question}
+
+      Prior plain-language summary of this same repository (context only, not new evidence):
+      {prior_summary}
+
+      Evidence (the complete, deterministic graph - the only source of truth):
+      {evidence_json}
+    variables:
+      - evidence_json
+      - prior_summary
+      - question
+      - retry_instruction
+    version: "1.0.0"

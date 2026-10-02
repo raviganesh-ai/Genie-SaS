@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Combobox,
+  Dropdown,
   Field,
   Input,
   Link,
@@ -17,7 +18,9 @@ import {
   Title2,
 } from "@fluentui/react-components";
 import { ApiError } from "@/services/httpClient";
+import { platformConfigApi } from "@/services/platformConfigApi";
 import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
+import { standardsApi } from "@/services/standardsApi";
 import { useSessionContext } from "@/state/SessionContext";
 import { ErrorState } from "@/components/ErrorState";
 import type { SafeError } from "@/types/common";
@@ -27,6 +30,7 @@ import type {
   RepositoryPurpose,
   RepositoryPurposeBinding,
 } from "@/types/repositoryConnection";
+import type { ArchitectureReferenceSnapshot, StandardsSnapshot } from "@/types/standards";
 
 const PURPOSE_LABELS: Record<RepositoryPurpose, string> = {
   code: "Code",
@@ -90,6 +94,29 @@ export function RepositoryConnectionPage(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<SafeError | null>(null);
 
+  // Platform-level (/configure) reference repo counts - shown read-only so
+  // the customer can see what Genie will actually fall back to for this
+  // mission, never a silent default.
+  const [platformArchitectureCount, setPlatformArchitectureCount] = useState<number | null>(null);
+  const [platformStandardsCount, setPlatformStandardsCount] = useState<number | null>(null);
+  // Any session-scoped override already created for THIS mission (most
+  // recent snapshot, if more than one was ever ingested) - takes
+  // precedence over the platform default, and is always shown alongside
+  // it so the effective choice is never hidden.
+  const [sessionArchitectureSnapshot, setSessionArchitectureSnapshot] =
+    useState<ArchitectureReferenceSnapshot | null>(null);
+  const [sessionStandardsSnapshot, setSessionStandardsSnapshot] = useState<StandardsSnapshot | null>(null);
+  const [overrideExpanded, setOverrideExpanded] = useState(false);
+  const [overridePurpose, setOverridePurpose] = useState<"architecture" | "standards">("architecture");
+  const [overrideQuery, setOverrideQuery] = useState("");
+  const [overrideSelectedRepository, setOverrideSelectedRepository] =
+    useState<GitHubRepositorySummary | null>(null);
+  const [overrideRef, setOverrideRef] = useState("");
+  const [overrideIncludedPaths, setOverrideIncludedPaths] = useState("");
+  const [overrideExcludedPaths, setOverrideExcludedPaths] = useState("");
+  const [overrideSaving, setOverrideSaving] = useState(false);
+  const [overrideError, setOverrideError] = useState<SafeError | null>(null);
+
   const loadPage = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -104,6 +131,36 @@ export function RepositoryConnectionPage(): JSX.Element {
       setError(err instanceof ApiError ? err : { message: "Unable to load repository evidence." });
     } finally {
       setLoading(false);
+    }
+    // The architecture/standards reference banner is supplementary, never-
+    // blocking context - a failure here (e.g. platform-config or standards
+    // being briefly unavailable) must never prevent the core repository-
+    // binding flow above from working, so it is intentionally a separate,
+    // independently-failing fetch rather than bundled into the same
+    // Promise.all as the critical path.
+    try {
+      const [architectureRepos, standardsRepos, sessionArchSnapshots, sessionStdSnapshots] =
+        await Promise.all([
+          platformConfigApi.list("architecture"),
+          platformConfigApi.list("standards"),
+          sessionId ? standardsApi.listArchitectureReferenceSnapshots(sessionId) : Promise.resolve([]),
+          sessionId ? standardsApi.listStandardsSnapshots(sessionId) : Promise.resolve([]),
+        ]);
+      setPlatformArchitectureCount(architectureRepos.length);
+      setPlatformStandardsCount(standardsRepos.length);
+      const latestArchSnapshot = [...sessionArchSnapshots].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )[0];
+      const latestStdSnapshot = [...sessionStdSnapshots].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )[0];
+      setSessionArchitectureSnapshot(latestArchSnapshot ?? null);
+      setSessionStandardsSnapshot(latestStdSnapshot ?? null);
+    } catch {
+      // Supplementary banner only - the core flow above already loaded
+      // successfully (or reported its own error) independent of this.
+      setPlatformArchitectureCount(null);
+      setPlatformStandardsCount(null);
     }
   }, [sessionId]);
 
@@ -130,6 +187,19 @@ export function RepositoryConnectionPage(): JSX.Element {
   const canBind = useMemo(
     () => Boolean(sessionId && selectedRepository && requestedRef.trim() && !saving),
     [sessionId, selectedRepository, requestedRef, saving],
+  );
+
+  const overrideFilteredRepositories = useMemo(
+    () =>
+      repositories.filter((repository) =>
+        repository.full_name.toLowerCase().includes(overrideQuery.toLowerCase()),
+      ),
+    [repositories, overrideQuery],
+  );
+  const overrideSelectedName = overrideSelectedRepository?.full_name ?? "";
+  const canBindOverride = useMemo(
+    () => Boolean(sessionId && overrideSelectedRepository && overrideRef.trim() && !overrideSaving),
+    [sessionId, overrideSelectedRepository, overrideRef, overrideSaving],
   );
 
   const handleSearch = useCallback(async () => {
@@ -200,6 +270,64 @@ export function RepositoryConnectionPage(): JSX.Element {
     requestedRef,
     includedPaths,
     excludedPaths,
+  ]);
+
+  const handleOverrideRepositorySelect = useCallback(
+    (fullName: string) => {
+      const selected = repositories.find((repository) => repository.full_name === fullName) ?? null;
+      setOverrideSelectedRepository(selected);
+      setOverrideRef(selected?.default_branch ?? "");
+    },
+    [repositories],
+  );
+
+  const handleOverrideBind = useCallback(async () => {
+    if (!sessionId || !overrideSelectedRepository) return;
+    setOverrideSaving(true);
+    setOverrideError(null);
+    try {
+      const binding = await repositoryConnectionApi.createBinding(sessionId, {
+        repository: overrideSelectedRepository,
+        purpose: overridePurpose,
+        requested_ref: overrideRef.trim(),
+        included_paths: pathsFromInput(overrideIncludedPaths),
+        excluded_paths:
+          pathsFromInput(overrideExcludedPaths).length > 0
+            ? pathsFromInput(overrideExcludedPaths)
+            : DEFAULT_EXCLUDED_PATHS,
+      });
+      setBindings((current) => [
+        ...current.filter((item) => item.purpose !== binding.purpose),
+        binding,
+      ]);
+      if (overridePurpose === "architecture") {
+        const snapshot = await standardsApi.ingestArchitectureReference(sessionId, binding.id);
+        setSessionArchitectureSnapshot(snapshot);
+      } else {
+        const snapshot = await standardsApi.ingestStandards(sessionId, binding.id);
+        setSessionStandardsSnapshot(snapshot);
+      }
+      setOverrideSelectedRepository(null);
+      setOverrideQuery("");
+      setOverrideRef("");
+      setOverrideIncludedPaths("");
+      setOverrideExcludedPaths("");
+    } catch (err) {
+      setOverrideError(
+        err instanceof ApiError
+          ? err
+          : { message: "Unable to bind and use this repository for this mission." },
+      );
+    } finally {
+      setOverrideSaving(false);
+    }
+  }, [
+    sessionId,
+    overrideSelectedRepository,
+    overridePurpose,
+    overrideRef,
+    overrideIncludedPaths,
+    overrideExcludedPaths,
   ]);
 
   if (!sessionId) {
@@ -318,7 +446,112 @@ export function RepositoryConnectionPage(): JSX.Element {
       </Card>
 
       <Card className="repository-intake-card">
-        <Text weight="semibold" size={400}>3. Confirm immutable evidence</Text>
+        <Text weight="semibold" size={400}>3. Architecture &amp; standards reference</Text>
+        <MessageBar intent={sessionArchitectureSnapshot ? "success" : platformArchitectureCount ? "info" : "warning"}>
+          <MessageBarBody>
+            <MessageBarTitle>Architecture reference</MessageBarTitle>
+            {sessionArchitectureSnapshot ? (
+              <>
+                This mission uses your own architecture reference -{" "}
+                <strong>{sessionArchitectureSnapshot.repository_full_name}</strong> - instead of{" "}
+                {platformArchitectureCount ? `the ${platformArchitectureCount} platform-configured repositor${platformArchitectureCount === 1 ? "y" : "ies"}` : "the platform default"}.
+              </>
+            ) : platformArchitectureCount ? (
+              <>Falls back to your {platformArchitectureCount} platform-configured architecture reference repositor{platformArchitectureCount === 1 ? "y" : "ies"} (see /configure).</>
+            ) : (
+              <>No architecture reference configured anywhere - Genie will apply its own best-practice judgment.</>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+        <MessageBar intent={sessionStandardsSnapshot ? "success" : platformStandardsCount ? "info" : "warning"}>
+          <MessageBarBody>
+            <MessageBarTitle>Standards reference</MessageBarTitle>
+            {sessionStandardsSnapshot ? (
+              <>
+                This mission uses your own standards reference -{" "}
+                <strong>{sessionStandardsSnapshot.repository_full_name}</strong> - instead of{" "}
+                {platformStandardsCount ? `the ${platformStandardsCount} platform-configured repositor${platformStandardsCount === 1 ? "y" : "ies"}` : "the platform default"}.
+              </>
+            ) : platformStandardsCount ? (
+              <>Falls back to your {platformStandardsCount} platform-configured standards repositor{platformStandardsCount === 1 ? "y" : "ies"} (see /configure).</>
+            ) : (
+              <>No standards repository configured anywhere - Genie will apply its own best-practice judgment.</>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+        <Button appearance="secondary" onClick={() => setOverrideExpanded((current) => !current)}>
+          {overrideExpanded ? "Hide" : "Use a different reference for this mission"}
+        </Button>
+        {overrideExpanded ? (
+          <div className="repository-override-form">
+            <Field label="Purpose" required>
+              <Dropdown
+                value={overridePurpose === "architecture" ? "Architecture" : "Standards"}
+                selectedOptions={[overridePurpose]}
+                onOptionSelect={(_, data) =>
+                  setOverridePurpose((data.optionValue as "architecture" | "standards") ?? "architecture")
+                }
+              >
+                <Option value="architecture">Architecture</Option>
+                <Option value="standards">Standards</Option>
+              </Dropdown>
+            </Field>
+            <Field label="Repository" required>
+              <Combobox
+                freeform
+                placeholder="Type to filter repositories visible to the connected identity"
+                value={overrideSelectedName || overrideQuery}
+                selectedOptions={overrideSelectedName ? [overrideSelectedName] : []}
+                disabled={!status?.connected}
+                onOptionSelect={(_, data) => handleOverrideRepositorySelect(data.optionValue ?? "")}
+                onInput={(event) => {
+                  setOverrideSelectedRepository(null);
+                  setOverrideQuery((event.target as HTMLInputElement).value);
+                }}
+              >
+                {overrideFilteredRepositories.map((repository) => (
+                  <Option
+                    key={repository.repository_id}
+                    value={repository.full_name}
+                    disabled={repository.archived}
+                    text={repository.full_name}
+                  >
+                    {repository.full_name}{repository.private ? " (private)" : ""}
+                  </Option>
+                ))}
+              </Combobox>
+            </Field>
+            <Field label="Branch or ref" required>
+              <Input
+                value={overrideRef}
+                placeholder="main"
+                onChange={(_, data) => setOverrideRef(data.value)}
+              />
+            </Field>
+            <Field label="Included paths" hint="Optional comma-separated repository-relative paths.">
+              <Input
+                value={overrideIncludedPaths}
+                placeholder="docs/architecture"
+                onChange={(_, data) => setOverrideIncludedPaths(data.value)}
+              />
+            </Field>
+            <Field label="Excluded paths" hint="Optional comma-separated repository-relative paths.">
+              <Input
+                value={overrideExcludedPaths}
+                placeholder="vendor, generated"
+                onChange={(_, data) => setOverrideExcludedPaths(data.value)}
+              />
+            </Field>
+            {overrideError ? <ErrorState error={overrideError} /> : null}
+            <Button appearance="primary" disabled={!canBindOverride} onClick={() => void handleOverrideBind()}>
+              {overrideSaving ? "Binding and ingesting..." : "Use this repository for this mission"}
+            </Button>
+          </div>
+        ) : null}
+      </Card>
+
+      <Card className="repository-intake-card">
+        <Text weight="semibold" size={400}>4. Confirm immutable evidence</Text>
         {bindings.length === 0 ? (
           <Text size={200} style={{ opacity: 0.7 }}>No repository purposes are bound yet.</Text>
         ) : (

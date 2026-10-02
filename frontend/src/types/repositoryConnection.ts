@@ -61,7 +61,9 @@ export type DependencyNodeType =
   | "source_file"
   | "manifest"
   | "package"
-  | "integration_endpoint";
+  | "integration_endpoint"
+  | "component"
+  | "technology";
 
 export interface DependencyNode {
   id: string;
@@ -72,11 +74,19 @@ export interface DependencyNode {
   attributes: Record<string, unknown>;
 }
 
+export type DependencyEdgeType =
+  | "contains"
+  | "declares"
+  | "depends_on"
+  | "imports"
+  | "integrates_with"
+  | "built_on";
+
 export interface DependencyEdge {
   id: string;
   source: string;
   target: string;
-  type: "contains" | "declares" | "depends_on" | "imports" | "integrates_with";
+  type: DependencyEdgeType;
   confidence: number;
   evidence: Array<{
     repository_full_name: string;
@@ -84,6 +94,30 @@ export interface DependencyEdge {
     path: string;
     excerpt: string | null;
   }>;
+}
+
+export interface ComponentRoleInsight {
+  component_id: string;
+  component_path: string;
+  role: string;
+  confidence: number;
+  rationale: string;
+}
+
+export interface RepositoryCodeSummary {
+  summary: string;
+  highlights: string[];
+  component_roles: ComponentRoleInsight[];
+  generated_by: string;
+  generated_at: string;
+}
+
+export interface RepositoryChatAnswer {
+  question: string;
+  answer: string;
+  referenced_paths: string[];
+  generated_by: string;
+  generated_at: string;
 }
 
 export interface RepositoryAssessment {
@@ -104,5 +138,6 @@ export interface RepositoryAssessment {
   nodes: DependencyNode[];
   edges: DependencyEdge[];
   coverage_gaps: Array<{ category: string; detail: string; paths: string[] }>;
+  code_summary: RepositoryCodeSummary | null;
   created_at: string;
 }

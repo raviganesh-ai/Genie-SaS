@@ -49,6 +49,7 @@ from app.api import (
     sessions,
     standards,
     uploads,
+    well_architected,
     workflow_events,
     workflows,
     workshop,
@@ -131,6 +132,8 @@ from app.repository_assessment.repository import (
     InMemoryRepositoryAssessmentRepository,
 )
 from app.repository_assessment.service import RepositoryAssessmentService
+from app.well_architected.microsoft_learn_client import MicrosoftLearnMcpClient
+from app.well_architected.service import WellArchitectedQaService
 from app.services.architecture_service import create_architecture_service
 from app.services.document_understanding_service import create_document_understanding_service
 from app.services.foundry_agent_inventory_service import FoundryAgentInventoryService
@@ -400,6 +403,7 @@ def create_app(
             max_files=resolved_settings.repository_assessment_max_files,
             max_depth=resolved_settings.repository_assessment_max_depth,
             max_source_bytes=resolved_settings.repository_assessment_max_source_bytes,
+            orchestrator=orchestrator,
         )
         app.state.standards_service = StandardsService(
             client=github_mcp_client,
@@ -411,6 +415,17 @@ def create_app(
             governance_service=orchestrator.governance_service,
             max_files=resolved_settings.repository_assessment_max_files,
             max_depth=resolved_settings.repository_assessment_max_depth,
+        )
+        app.state.well_architected_qa_service = WellArchitectedQaService(
+            learn_client=MicrosoftLearnMcpClient(
+                endpoint=resolved_settings.microsoft_learn_mcp_endpoint,
+                timeout_seconds=resolved_settings.microsoft_learn_mcp_timeout_seconds,
+            ),
+            orchestrator=orchestrator if resolved_settings.well_architected_qa_enabled else None,
+            session_service=session_service,
+            governance_service=orchestrator.governance_service,
+            max_search_results=resolved_settings.well_architected_max_search_results,
+            max_fetched_documents=resolved_settings.well_architected_max_fetched_documents,
         )
         app.state.platform_config_service = PlatformConfigService(
             client=github_mcp_client,
@@ -766,6 +781,7 @@ def create_app(
     app.include_router(discovery.router)
     app.include_router(repository_connections.router)
     app.include_router(repository_assessments.router)
+    app.include_router(well_architected.router)
     app.include_router(standards.router)
     app.include_router(standards.architecture_reference_router)
     app.include_router(platform_config.router)

@@ -27,6 +27,7 @@ from app.orchestration.workflow_event_bus import WorkflowEventBus
 from app.phase_tracking.service import PhaseTrackingService
 from app.repository_connections.service import RepositoryConnectionService
 from app.repository_assessment.service import RepositoryAssessmentService
+from app.well_architected.service import WellArchitectedQaService
 from app.services.architecture_service import ArchitectureService
 from app.services.document_understanding_service import DocumentUnderstandingService
 from app.services.foundry_agent_inventory_service import FoundryAgentInventoryService
@@ -72,6 +73,7 @@ __all__ = [
     "get_standards_service",
     "get_platform_config_service",
     "get_traceability_service",
+    "get_well_architected_qa_service",
     "get_workflow_event_bus",
     "get_work_iq_validation_service",
     "get_workshop_service",
@@ -200,6 +202,10 @@ def get_repository_connection_service(request: Request) -> RepositoryConnectionS
 
 def get_repository_assessment_service(request: Request) -> RepositoryAssessmentService:
     return request.app.state.repository_assessment_service
+
+
+def get_well_architected_qa_service(request: Request) -> WellArchitectedQaService:
+    return request.app.state.well_architected_qa_service
 
 
 def get_standards_service(request: Request) -> StandardsService:

@@ -58,10 +58,22 @@ export function mockFetchSequence(
     sseChunks?: string[];
   }>,
 ) {
+  // Tracks how many times each distinct `match` string has already been
+  // consumed, so two (or more) handlers sharing the same path (e.g. a GET
+  // list on page load and a POST create to that same endpoint) resolve in
+  // the order they were registered instead of the first one always
+  // winning - existing tests are unaffected since they only ever register
+  // one handler per match.
+  const matchConsumedCount = new Map<string, number>();
   const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const pathname = new URL(url).pathname;
-    const handler = handlers.find((h) => pathname.endsWith(h.match));
+    const matchingHandlers = handlers.filter((h) => pathname.endsWith(h.match));
+    const consumed = matchingHandlers.length > 0 ? (matchConsumedCount.get(matchingHandlers[0].match) ?? 0) : 0;
+    const handler = matchingHandlers[Math.min(consumed, matchingHandlers.length - 1)];
+    if (matchingHandlers.length > 0) {
+      matchConsumedCount.set(matchingHandlers[0].match, consumed + 1);
+    }
     if (handler?.sseChunks) {
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({

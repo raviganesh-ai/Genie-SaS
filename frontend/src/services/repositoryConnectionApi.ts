@@ -3,6 +3,7 @@ import type {
   CreateRepositoryBindingRequest,
   GitHubMcpConnectionStatus,
   GitHubRepositoryPage,
+  RepositoryChatAnswer,
   RepositoryPurposeBinding,
   RepositoryAssessment,
 } from "@/types/repositoryConnection";
@@ -48,6 +49,22 @@ export const repositoryConnectionApi = {
     return apiFetch<RepositoryAssessment>(
       `/sessions/${sessionId}/repository-assessments/${bindingId}`,
       { method: "POST" },
+    );
+  },
+
+  /**
+   * Asks one free-text question about an already-completed assessment
+   * (code analysis) - answered strictly from that assessment's
+   * deterministic dependency/component graph, never general knowledge.
+   */
+  askAboutAssessment(
+    sessionId: string,
+    assessmentId: string,
+    message: string,
+  ): Promise<RepositoryChatAnswer> {
+    return apiFetch<RepositoryChatAnswer>(
+      `/sessions/${sessionId}/repository-assessments/${assessmentId}/ask`,
+      { method: "POST", body: { message } },
     );
   },
 };

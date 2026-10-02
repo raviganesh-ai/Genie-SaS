@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { RepositoryConnectionPage } from "@/features/repository-connections/RepositoryConnectionPage";
 import { mockFetchSequence, renderWithProviders } from "./testUtils";
 import { FIXTURE_SESSION_ID } from "./fixtures";
@@ -75,5 +76,83 @@ describe("RepositoryConnectionPage", () => {
     expect(
       screen.queryByRole("button", { name: "Continue to modernization plan" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows platform reference counts and lets the user bind a session-specific architecture override", async () => {
+    const user = userEvent.setup();
+    const overrideBinding = {
+      ...BINDING,
+      id: "binding-2",
+      purpose: "architecture",
+      repository_full_name: "raviganesh-ai/my-opinionated-architecture",
+    };
+    const snapshot = {
+      id: "snapshot-1",
+      session_id: FIXTURE_SESSION_ID,
+      binding_id: "binding-2",
+      repository_full_name: "raviganesh-ai/my-opinionated-architecture",
+      commit: "a".repeat(40),
+      paths: ["ARCHITECTURE.md"],
+      content_hashes: {},
+      combined_reference_text: "Use a modular monolith.",
+      gaps: [],
+      created_at: "2026-01-02T00:00:00Z",
+    };
+    mockFetchSequence([
+      { match: "/repository-connections/github/status", response: STATUS },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [BINDING] },
+      { match: "/repository-connections/github/repositories", response: { repositories: [{
+        repository_id: 2,
+        name: "my-opinionated-architecture",
+        full_name: "raviganesh-ai/my-opinionated-architecture",
+        description: "",
+        html_url: "https://github.com/raviganesh-ai/my-opinionated-architecture",
+        private: false,
+        archived: false,
+        default_branch: "main",
+        language: null,
+        updated_at: null,
+      }], total_count: 1, incomplete_results: false, page: 1, per_page: 30 } },
+      { match: "/platform-config/reference-repositories", response: [{ id: "ref-1" }] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/architecture-reference`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/standards`, response: [] },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`,
+        response: overrideBinding,
+      },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/architecture-reference/ingest/binding-2`,
+        response: snapshot,
+      },
+    ]);
+
+    renderWithProviders(<RepositoryConnectionPage />, {
+      sessionId: FIXTURE_SESSION_ID,
+      missionKind: "understand_code",
+    });
+
+    expect(
+      await screen.findByText(/Falls back to your 1 platform-configured architecture reference/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/No standards repository configured anywhere/),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Use a different reference for this mission" }));
+    const overrideCombobox = screen.getAllByPlaceholderText(
+      "Type to filter repositories visible to the connected identity",
+    )[1];
+    await user.type(overrideCombobox, "my-opinionated-architecture");
+    const option = await screen.findByRole("option", { name: /my-opinionated-architecture/ });
+    await user.click(option);
+    // Selecting a repository auto-fills "Branch or ref" with its default
+    // branch ("main"), so the override can be bound immediately.
+    await user.click(screen.getByRole("button", { name: "Use this repository for this mission" }));
+
+    expect(
+      await screen.findByText(/This mission uses your own architecture reference/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("raviganesh-ai/my-opinionated-architecture").length).toBeGreaterThan(0);
   });
 });

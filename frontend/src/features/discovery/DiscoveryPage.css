@@ -308,6 +308,17 @@
   min-width: 0;
 }
 
+.discovery-well-architected-citations {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+}
+
+.discovery-well-architected-citations a {
+  color: #6cb5ff;
+}
+
 @media (max-width: 700px) {
   .discovery-ideation-row {
     grid-template-columns: minmax(0, 1fr);

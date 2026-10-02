@@ -38,6 +38,7 @@ import { PageHeader } from "@/layouts/AppShell";
 import { useUploadAction, useUploads } from "@/hooks/useUploads";
 import { ApiError } from "@/services/httpClient";
 import { discoveryApi } from "@/services/discoveryApi";
+import { wellArchitectedApi } from "@/services/wellArchitectedApi";
 import { useSessionContext } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
 import type {
@@ -47,6 +48,7 @@ import type {
   ProposedSolution,
 } from "@/types/discovery";
 import type { UploadType } from "@/types/upload";
+import type { DocCitation } from "@/types/wellArchitected";
 import { layoutArchitecture } from "./architectureLayout";
 import { getAzureServiceIcon } from "./azureIconManifest";
 
@@ -80,6 +82,14 @@ interface IdeationMessage {
   id: string;
   role: "user" | "genie";
   text: string;
+}
+
+interface WellArchitectedMessage {
+  id: string;
+  role: "user" | "genie";
+  text: string;
+  citations?: DocCitation[];
+  grounded?: boolean;
 }
 
 function AzureServiceNode({ data }: NodeProps<AzureNodeData>): JSX.Element {
@@ -470,6 +480,39 @@ export function DiscoveryPage(): JSX.Element {
       setIdeating(false);
     }
   }, [discoveryCase?.proposed_solutions.length, ideating, ideationDraft, sessionId]);
+
+  const [wellArchitectedMessages, setWellArchitectedMessages] = useState<WellArchitectedMessage[]>([]);
+  const [wellArchitectedDraft, setWellArchitectedDraft] = useState("");
+  const [wellArchitectedAsking, setWellArchitectedAsking] = useState(false);
+  const [wellArchitectedError, setWellArchitectedError] = useState<SafeError | null>(null);
+
+  const handleAskWellArchitected = useCallback(async () => {
+    const question = wellArchitectedDraft.trim();
+    if (!sessionId || !question || wellArchitectedAsking) return;
+    setWellArchitectedMessages((current) => [...current, { id: `${Date.now()}-user`, role: "user", text: question }]);
+    setWellArchitectedDraft("");
+    setWellArchitectedError(null);
+    setWellArchitectedAsking(true);
+    try {
+      const result = await wellArchitectedApi.ask(sessionId, question);
+      setWellArchitectedMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}-genie`,
+          role: "genie",
+          text: result.answer,
+          citations: result.citations,
+          grounded: result.grounded,
+        },
+      ]);
+    } catch (caught) {
+      setWellArchitectedError(
+        caught instanceof ApiError ? caught : { message: "Unable to answer that question." },
+      );
+    } finally {
+      setWellArchitectedAsking(false);
+    }
+  }, [sessionId, wellArchitectedAsking, wellArchitectedDraft]);
 
   const startPrototype = useCallback(async () => {
     if (!sessionId) return;
@@ -998,6 +1041,65 @@ export function DiscoveryPage(): JSX.Element {
               </Button>
             </div>
             {ideating ? <Spinner size="tiny" label="Genie is exploring an alternative architecture..." /> : null}
+          </div>
+          <div className="discovery-ideation-panel discovery-well-architected-panel" aria-labelledby="discovery-well-architected">
+            <div>
+              <Text id="discovery-well-architected" weight="semibold">Ask about Well-Architected pillars & Azure docs</Text>
+              <Text size={200} className="discovery-muted" style={{ display: "block" }}>
+                Ask about Reliability, Security, Cost Optimization, Operational Excellence, or
+                Performance Efficiency, or a specific Azure service's capabilities and limits.
+                Genie answers only from real Microsoft Learn documents it retrieves live for
+                your exact question, and cites every source - it never generates a new solution here.
+              </Text>
+            </div>
+            {wellArchitectedMessages.length > 0 ? (
+              <ul className="discovery-ideation-log">
+                {wellArchitectedMessages.map((item) => (
+                  <li key={item.id} className={`discovery-ideation-message discovery-ideation-message-${item.role}`}>
+                    <Text size={200} weight="semibold">{item.role === "user" ? "You" : "Genie"}</Text>
+                    <Text size={200}>{item.text}</Text>
+                    {item.role === "genie" && item.citations && item.citations.length > 0 ? (
+                      <ul className="discovery-well-architected-citations">
+                        {item.citations.map((citation) => (
+                          <li key={citation.url}>
+                            <a href={citation.url} target="_blank" rel="noreferrer">{citation.title}</a>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {item.role === "genie" && item.grounded === false ? (
+                      <Badge color="warning" appearance="tint" size="small">Not grounded in Microsoft documentation</Badge>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {wellArchitectedError ? <ErrorState error={wellArchitectedError} /> : null}
+            <div className="discovery-ideation-row">
+              <Input
+                className="discovery-ideation-input"
+                placeholder="e.g. How reliable is Azure Cosmos DB, and what's its SLA?"
+                value={wellArchitectedDraft}
+                disabled={wellArchitectedAsking}
+                onChange={(_, data) => setWellArchitectedDraft(data.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleAskWellArchitected();
+                  }
+                }}
+              />
+              <Button
+                appearance="primary"
+                disabled={wellArchitectedAsking || !wellArchitectedDraft.trim()}
+                onClick={() => void handleAskWellArchitected()}
+              >
+                {wellArchitectedAsking ? "Asking..." : "Ask Genie"}
+              </Button>
+            </div>
+            {wellArchitectedAsking ? (
+              <Spinner size="tiny" label="Genie is retrieving real Microsoft Learn documentation..." />
+            ) : null}
           </div>
           {discoveryCase.status === "ready_to_prototype" ? (
             <div className="discovery-actions">

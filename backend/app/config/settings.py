@@ -154,6 +154,19 @@ class Settings(BaseSettings):
         default=1_000_000, ge=1024, le=10_000_000
     )
 
+    # --- Microsoft Learn MCP (grounded Well-Architected / Azure docs Q&A) ------
+    # The public, unauthenticated Microsoft Learn MCP server - confirmed live
+    # (microsoft_docs_search/microsoft_docs_fetch) during development, not
+    # merely assumed from documentation. Used so WellArchitectedQaService can
+    # answer only from real, retrieved learn.microsoft.com content (cited by
+    # URL) instead of the model's own unverified trained knowledge - no new
+    # Azure resource or secret required since this endpoint requires no auth.
+    well_architected_qa_enabled: bool = True
+    microsoft_learn_mcp_endpoint: str = "https://learn.microsoft.com/api/mcp"
+    microsoft_learn_mcp_timeout_seconds: float = Field(default=20, gt=0, le=120)
+    well_architected_max_search_results: int = Field(default=5, ge=1, le=10)
+    well_architected_max_fetched_documents: int = Field(default=2, ge=0, le=5)
+
     # --- IQ evidence providers -------------------------------------------------
     # Provider-specific tool names and query argument names are externalized
     # because Genie validates the real MCP capability contract at runtime

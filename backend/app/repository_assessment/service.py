@@ -13,14 +13,25 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.agents.gateway import AgentGatewayError
 from app.governance.governance_service import GovernanceService
+from app.orchestration.agent_orchestrator import AgentOrchestrator
 from app.repository_assessment.models import (
+    ComponentRoleInsight,
     CoverageGap,
     DependencyEdge,
     DependencyNode,
     GraphEvidence,
     RepositoryAssessment,
+    RepositoryChatAnswer,
+    RepositoryCodeSummary,
     RepositoryInventory,
+)
+from app.repository_assessment.parsing import (
+    RepositoryAssessmentAgentResponseError,
+    parse_agent_response,
 )
 from app.repository_assessment.repository import RepositoryAssessmentRepository
 from app.repository_connections.github_mcp_client import GitHubMcpClient, GitHubMcpError
@@ -53,6 +64,50 @@ _IMPORT_PATTERNS = (
 )
 _URL_PATTERN = re.compile(r"https://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+")
 
+# Curated, deterministic (non-LLM) package-name -> human-readable framework
+# name lookup used only to label "built_on" technology nodes with real
+# evidence (the declaring manifest path) - never a substitute for genuine
+# dependency analysis, just a small enrichment on top of it.
+_FRAMEWORK_PACKAGES = {
+    "react": "React",
+    "react-dom": "React",
+    "next": "Next.js",
+    "vue": "Vue.js",
+    "@angular/core": "Angular",
+    "express": "Express",
+    "fastapi": "FastAPI",
+    "flask": "Flask",
+    "django": "Django",
+    "uvicorn": "Uvicorn",
+    "@fluentui/react-components": "Fluent UI",
+    "reactflow": "React Flow",
+    "spring-boot-starter": "Spring Boot",
+}
+
+
+class _ComponentRoleDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    component_path: str
+    role: str
+    confidence: float = Field(ge=0, le=1)
+    rationale: str
+
+
+class _CodeSummaryEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    highlights: list[str] = Field(default_factory=list)
+    components: list[_ComponentRoleDraft] = Field(default_factory=list)
+
+
+class _ChatAnswerEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str
+    referenced_paths: list[str] = Field(default_factory=list)
+
 
 class RepositoryAssessmentError(RuntimeError):
     """Raised when a live immutable repository assessment cannot complete."""
@@ -70,6 +125,7 @@ class RepositoryAssessmentService:
         max_files: int,
         max_depth: int,
         max_source_bytes: int,
+        orchestrator: AgentOrchestrator | None = None,
     ) -> None:
         self._client = client
         self._binding_repository = binding_repository
@@ -79,6 +135,13 @@ class RepositoryAssessmentService:
         self._max_files = max_files
         self._max_depth = max_depth
         self._max_source_bytes = max_source_bytes
+        # Optional: the plain-language code summary + component role
+        # classification (see _attach_code_summary) is a layered enrichment
+        # on top of the always-available deterministic graph below, not a
+        # requirement for it - omitting this (e.g. in tests, or if Foundry
+        # is not configured in this environment) simply skips that layer
+        # rather than failing the whole assessment.
+        self._orchestrator = orchestrator
 
     async def assess(
         self,
@@ -114,6 +177,9 @@ class RepositoryAssessmentService:
             files=files,
             traversal_gaps=traversal_gaps,
         )
+        assessment = await self._attach_code_summary(
+            assessment=assessment, binding=binding, trace_id=trace_id
+        )
         await self._assessment_repository.put(assessment)
         await self._governance_service.record_tool_request(
             session_id=session_id,
@@ -123,6 +189,7 @@ class RepositoryAssessmentService:
             detail={
                 "assessment_id": assessment.id,
                 "binding_id": binding.id,
+                "code_summary_generated": assessment.code_summary is not None,
                 "repository_full_name": binding.repository_full_name,
                 "commit": binding.resolved_commit,
                 "file_count": assessment.inventory.file_count,
@@ -141,6 +208,223 @@ class RepositoryAssessmentService:
             session_id=session_id, requesting_user_id=requesting_user_id
         )
         return await self._assessment_repository.list_for_session(session_id=session_id)
+
+    async def ask(
+        self,
+        *,
+        session_id: str,
+        assessment_id: str,
+        requesting_user_id: str,
+        message: str,
+        trace_id: str,
+    ) -> RepositoryChatAnswer:
+        """Answers one free-text question about an already-completed
+        assessment (code analysis) - grounded only in its deterministic
+        graph, never requiring the whole repository to be re-read. Fails
+        closed (raises) rather than ever answering from the model's own
+        general knowledge: unlike the summary attached during `assess()`
+        (which fails soft with a coverage gap so it never blocks the
+        graph), this is a user-initiated, on-demand request with nothing
+        else useful to return if it cannot be grounded."""
+        await self._session_service.get_session(
+            session_id=session_id, requesting_user_id=requesting_user_id
+        )
+        cleaned_message = message.strip()
+        if not cleaned_message:
+            raise RepositoryAssessmentError("Describe what you'd like to know about this repository.")
+        if self._orchestrator is None:
+            raise RepositoryAssessmentError("Azure AI Foundry orchestrator is not configured.")
+        assessment = await self._assessment_repository.get(assessment_id=assessment_id)
+        if assessment is None or assessment.session_id != session_id:
+            raise RepositoryAssessmentError("Repository assessment was not found for this session.")
+        evidence = self._code_summary_evidence(assessment)
+        valid_paths = {
+            path
+            for component in evidence["components"]
+            for path in component["sample_paths"]
+        } | {component["component_path"] for component in evidence["components"]}
+        variables = {
+            "evidence_json": json.dumps(evidence),
+            "prior_summary": assessment.code_summary.summary if assessment.code_summary else "",
+            "question": cleaned_message,
+            "retry_instruction": "",
+        }
+        for attempt in range(2):
+            result = await self._orchestrator.execute_agent(
+                agent_id="code-analyst",
+                prompt_id="repository-code-chat-v1",
+                variables=variables,
+                session_id=session_id,
+                trace_id=f"{trace_id}:repository-chat",
+            )
+            try:
+                envelope = parse_agent_response(result.output_text, _ChatAnswerEnvelope)
+                break
+            except RepositoryAssessmentAgentResponseError as exc:
+                if attempt == 1:
+                    raise RepositoryAssessmentError(str(exc)) from exc
+                variables["retry_instruction"] = (
+                    "A prior response was malformed, truncated, or schema-invalid. "
+                    f"Correct these exact validation issues: {exc} Regenerate the "
+                    "complete response as fresh JSON, referencing only paths that "
+                    "literally appear in evidence_json."
+                )
+        else:
+            raise RepositoryAssessmentError("Repository chat retry loop exited unexpectedly.")
+        answer = RepositoryChatAnswer(
+            question=cleaned_message,
+            answer=envelope.answer,
+            referenced_paths=[path for path in envelope.referenced_paths if path in valid_paths],
+            generated_at=datetime.now(UTC),
+        )
+        await self._governance_service.record_tool_request(
+            session_id=session_id,
+            trace_id=trace_id,
+            agent_id="repository-assessment-service",
+            tool_name="code_analyst.ask",
+            detail={
+                "assessment_id": assessment.id,
+                "question": cleaned_message,
+                "referenced_path_count": len(answer.referenced_paths),
+            },
+        )
+        return answer
+
+    async def _attach_code_summary(
+        self,
+        *,
+        assessment: RepositoryAssessment,
+        binding: RepositoryPurposeBinding,
+        trace_id: str,
+    ) -> RepositoryAssessment:
+        """Layers a plain-language code summary + per-component role
+        classification onto an already-built deterministic assessment.
+
+        This never blocks or invalidates the deterministic graph above it:
+        if Foundry is not configured, or the agent's response cannot be
+        parsed after retrying, the assessment is returned unchanged except
+        for one explanatory `coverage_gaps` entry - a real, visible failure
+        (fail closed), never a fabricated summary."""
+        if self._orchestrator is None:
+            return assessment
+        try:
+            summary = await self._execute_code_summary(
+                assessment=assessment, binding=binding, trace_id=trace_id
+            )
+        except (RepositoryAssessmentAgentResponseError, AgentGatewayError) as exc:
+            gap = CoverageGap(
+                category="summary_unavailable",
+                detail=f"Genie could not generate a plain-language code summary: {exc}",
+                paths=[],
+            )
+            return assessment.model_copy(
+                update={"coverage_gaps": [*assessment.coverage_gaps, gap]}
+            )
+        return assessment.model_copy(update={"code_summary": summary})
+
+    async def _execute_code_summary(
+        self,
+        *,
+        assessment: RepositoryAssessment,
+        binding: RepositoryPurposeBinding,
+        trace_id: str,
+    ) -> RepositoryCodeSummary:
+        orchestrator = self._orchestrator
+        if orchestrator is None:
+            raise RepositoryAssessmentError("Azure AI Foundry orchestrator is not configured.")
+        evidence = self._code_summary_evidence(assessment)
+        component_ids = {item["component_path"]: item["id"] for item in evidence["components"]}
+        variables = {
+            "repository_full_name": assessment.repository_full_name,
+            "commit": assessment.commit,
+            "evidence_json": json.dumps(evidence),
+            "retry_instruction": "",
+        }
+        for attempt in range(2):
+            result = await orchestrator.execute_agent(
+                agent_id="code-analyst",
+                prompt_id="repository-code-summary-v1",
+                variables=variables,
+                session_id=binding.session_id,
+                trace_id=f"{trace_id}:code-summary",
+            )
+            try:
+                envelope = parse_agent_response(result.output_text, _CodeSummaryEnvelope)
+            except RepositoryAssessmentAgentResponseError as exc:
+                if attempt == 1:
+                    raise
+                variables["retry_instruction"] = (
+                    "A prior response was malformed, truncated, or schema-invalid. "
+                    f"Correct these exact validation issues: {exc} Regenerate the "
+                    "complete response as fresh JSON, referencing only "
+                    "component_path values that literally appear in evidence_json."
+                )
+                continue
+            component_roles = [
+                ComponentRoleInsight(
+                    component_id=component_ids[item.component_path],
+                    component_path=item.component_path,
+                    role=item.role,
+                    confidence=item.confidence,
+                    rationale=item.rationale,
+                )
+                for item in envelope.components
+                if item.component_path in component_ids
+            ]
+            return RepositoryCodeSummary(
+                summary=envelope.summary,
+                highlights=envelope.highlights,
+                component_roles=component_roles,
+                generated_at=datetime.now(UTC),
+            )
+        raise RuntimeError("Repository code summary retry loop exited unexpectedly.")
+
+    @staticmethod
+    def _code_summary_evidence(assessment: RepositoryAssessment) -> dict[str, Any]:
+        """Builds a compact, fully evidence-backed JSON view of the already
+        -built graph for the LLM to summarize/classify - never the raw
+        file contents, and never anything the deterministic analyzers did
+        not already find."""
+        nodes_by_id = {node.id: node for node in assessment.nodes}
+        components: list[dict[str, Any]] = []
+        for node in assessment.nodes:
+            if node.type != "component":
+                continue
+            file_nodes = [
+                nodes_by_id[edge.target]
+                for edge in assessment.edges
+                if edge.source == node.id
+                and edge.type == "contains"
+                and edge.target in nodes_by_id
+            ]
+            technology_nodes = [
+                nodes_by_id[edge.target]
+                for edge in assessment.edges
+                if edge.source == node.id
+                and edge.type == "built_on"
+                and edge.target in nodes_by_id
+            ]
+            components.append(
+                {
+                    "id": node.id,
+                    "component_path": node.name,
+                    "file_count": len(file_nodes),
+                    "sample_paths": sorted(f.path for f in file_nodes if f.path)[:8],
+                    "technologies": sorted({t.name for t in technology_nodes}),
+                }
+            )
+        packages = sorted({node.name for node in assessment.nodes if node.type == "package"})[:30]
+        endpoints = sorted(
+            {node.name for node in assessment.nodes if node.type == "integration_endpoint"}
+        )[:20]
+        return {
+            "languages": assessment.inventory.languages,
+            "file_count": assessment.inventory.file_count,
+            "analyzed_file_count": assessment.inventory.analyzed_file_count,
+            "components": components,
+            "packages": packages,
+            "integration_endpoints": endpoints,
+        }
 
     async def _enumerate_files(
         self,
@@ -231,6 +515,15 @@ class RepositoryAssessmentService:
         }
         edges: dict[str, DependencyEdge] = {}
         package_nodes: dict[str, str] = {}
+        component_nodes: dict[str, str] = {}
+        # Deterministic intra-repository "depends_on" resolution (see
+        # _resolve_local_dependencies): every analyzed source file is
+        # registered here by id, and every import that did NOT match a
+        # declared external package is queued for a second pass once every
+        # file is known, so a cross-component local import can be
+        # distinguished from an external one in a single read of each file.
+        source_file_registry: dict[str, tuple[str, str]] = {}
+        pending_local_imports: list[tuple[str, str, str, str]] = []
         analyzed_count = 0
         languages: set[str] = set()
         manifest_paths: list[str] = []
@@ -302,6 +595,50 @@ class RepositoryAssessmentService:
                 binding=binding,
                 path=path,
             )
+            # Group this file into its top-level-folder component (the
+            # "Recommended" deterministic grouping) - every analyzed file
+            # belongs to exactly one component, and every component is
+            # reachable from the repository node, independent of whether
+            # the code-analyst's LLM-assisted role classification below
+            # ever runs or succeeds.
+            component_key = self._component_key(path)
+            component_id = component_nodes.get(component_key)
+            if component_id is None:
+                component_id = self._node_id("component", component_key)
+                component_nodes[component_key] = component_id
+                nodes[component_id] = DependencyNode(
+                    id=component_id,
+                    type="component",
+                    name=component_key,
+                    path=component_key,
+                )
+                self._add_edge(
+                    edges,
+                    source=repository_node_id,
+                    target=component_id,
+                    edge_type="contains",
+                    binding=binding,
+                    path=component_key,
+                )
+            self._add_edge(
+                edges,
+                source=component_id,
+                target=file_node_id,
+                edge_type="contains",
+                binding=binding,
+                path=path,
+            )
+            if suffix in _LANGUAGES:
+                self._add_technology_edge(
+                    nodes=nodes,
+                    edges=edges,
+                    component_id=component_id,
+                    technology_name=_LANGUAGES[suffix],
+                    binding=binding,
+                    path=path,
+                )
+            if not is_manifest:
+                source_file_registry[file_node_id] = (component_id, path)
             if is_manifest:
                 manifest_paths.append(path)
                 try:
@@ -336,6 +673,16 @@ class RepositoryAssessmentService:
                         path=path,
                         excerpt=f"{dependency_name} {version or ''}".strip(),
                     )
+                    framework_name = _FRAMEWORK_PACKAGES.get(dependency_name.lower())
+                    if framework_name is not None:
+                        self._add_technology_edge(
+                            nodes=nodes,
+                            edges=edges,
+                            component_id=component_id,
+                            technology_name=framework_name,
+                            binding=binding,
+                            path=path,
+                        )
             else:
                 for imported in self._parse_imports(content):
                     package_id = self._match_package(imported, package_nodes)
@@ -350,6 +697,8 @@ class RepositoryAssessmentService:
                             excerpt=imported,
                             confidence=0.9,
                         )
+                    else:
+                        pending_local_imports.append((file_node_id, component_id, path, imported))
                 for endpoint in self._parse_endpoints(content):
                     endpoint_id = self._node_id("integration_endpoint", endpoint)
                     nodes.setdefault(
@@ -370,6 +719,13 @@ class RepositoryAssessmentService:
                         excerpt=endpoint,
                         confidence=0.85,
                     )
+
+        self._resolve_local_dependencies(
+            edges=edges,
+            binding=binding,
+            source_file_registry=source_file_registry,
+            pending_local_imports=pending_local_imports,
+        )
 
         inventory = RepositoryInventory(
             file_count=len(files),
@@ -491,6 +847,98 @@ class RepositoryAssessmentService:
             confidence=confidence,
             evidence=[evidence],
         )
+
+    @staticmethod
+    def _component_key(path: str) -> str:
+        """Groups a file into a component by its top-level repository
+        folder - the simplest, fully evidence-based grouping (no
+        inference): a root-level file (no folder) forms a synthetic
+        "(root)" component so it is still represented in the graph."""
+        parts = PurePosixPath(path).parts
+        return parts[0] if len(parts) > 1 else "(root)"
+
+    @classmethod
+    def _add_technology_edge(
+        cls,
+        *,
+        nodes: dict[str, DependencyNode],
+        edges: dict[str, DependencyEdge],
+        component_id: str,
+        technology_name: str,
+        binding: RepositoryPurposeBinding,
+        path: str,
+    ) -> None:
+        technology_id = cls._node_id("technology", technology_name.lower())
+        nodes.setdefault(
+            technology_id,
+            DependencyNode(id=technology_id, type="technology", name=technology_name),
+        )
+        cls._add_edge(
+            edges,
+            source=component_id,
+            target=technology_id,
+            edge_type="built_on",
+            binding=binding,
+            path=path,
+            excerpt=technology_name,
+        )
+
+    @classmethod
+    def _resolve_local_dependencies(
+        cls,
+        *,
+        edges: dict[str, DependencyEdge],
+        binding: RepositoryPurposeBinding,
+        source_file_registry: dict[str, tuple[str, str]],
+        pending_local_imports: list[tuple[str, str, str, str]],
+    ) -> None:
+        """Second pass (see ``pending_local_imports``): links components
+        that depend on each other via plain intra-repository imports - an
+        import that did not match any declared external package. This is
+        necessarily heuristic (file-stem matching, not full language-aware
+        module resolution): a match is used only when it is unambiguous
+        (exactly one other analyzed file shares that stem), so an
+        uncertain guess is skipped rather than asserted as fact - hence the
+        reduced 0.6 confidence even when a match is found. Only surfaces
+        genuine cross-component coupling; two files in the SAME component
+        importing each other is normal internal structure, not a
+        reportable interdependency.
+        """
+        stem_index: dict[str, list[tuple[str, str]]] = {}
+        for file_node_id, (component_id, path) in source_file_registry.items():
+            stem = PurePosixPath(path).stem.lower()
+            stem_index.setdefault(stem, []).append((file_node_id, component_id))
+
+        for source_file_id, source_component_id, path, imported in pending_local_imports:
+            # Take the last slash-segment first (correctly isolates a JS/TS
+            # relative import's final path component, e.g. "../lib/helper"
+            # -> "helper"), then the LAST dot-segment (correctly isolates a
+            # Python dotted-package import's final module name, e.g.
+            # "shared.helper" -> "helper", not the package name "shared").
+            last_segment = imported.rstrip("/").split("/")[-1]
+            candidate_stem = last_segment.split(".")[-1].lower() if last_segment else ""
+            if not candidate_stem:
+                continue
+            candidates = [
+                candidate
+                for candidate in stem_index.get(candidate_stem, [])
+                if candidate[0] != source_file_id
+            ]
+            if len(candidates) != 1:
+                continue  # no match, or ambiguous (several same-named files) - never guess
+            _, target_component_id = candidates[0]
+            if target_component_id == source_component_id:
+                continue  # only cross-component coupling is reportable
+            cls._add_edge(
+                edges,
+                source=source_component_id,
+                target=target_component_id,
+                edge_type="depends_on",
+                binding=binding,
+                path=path,
+                excerpt=imported,
+                confidence=0.6,
+            )
 
     @staticmethod
     def _parse_dependencies(path: str, content: str) -> list[tuple[str, str | None]]:
