@@ -33,6 +33,9 @@ _COMMIT = "a" * 40
 
 _VALID_PAYLOAD = {
     "summary": "Upgraded the runtime.",
+    "rewrite_strategy": "Upgrade in place; no architectural change is required.",
+    "proposed_components": [],
+    "deployment_plan": ["Merge the draft pull request after review.", "Deploy as usual."],
     "changes": [{"path": "README.md", "content": "Upgraded.", "reason": "evidence-backed"}],
     "validation_commands": ["pytest"],
     "residual_risks": [],
@@ -117,7 +120,9 @@ def _assessment() -> RepositoryAssessment:
     )
 
 
-async def _build_service(*, orchestrator: _ScriptedOrchestrator) -> ModernizationService:
+async def _build_service(
+    *, orchestrator: _ScriptedOrchestrator, pricing_service: Any = None
+) -> ModernizationService:
     binding_repository = InMemoryRepositoryBindingRepository()
     await binding_repository.put(_binding())
     assessment_repository = InMemoryRepositoryAssessmentRepository()
@@ -135,6 +140,7 @@ async def _build_service(*, orchestrator: _ScriptedOrchestrator) -> Modernizatio
         approval_service=_FakeApprovalService(),  # type: ignore[arg-type]
         governance_service=_FakeGovernanceService(),  # type: ignore[arg-type]
         capability_catalog=load_modernization_capabilities(_CONFIG_ROOT),
+        pricing_service=pricing_service,
     )
 
 
@@ -186,3 +192,102 @@ async def test_generate_plan_raises_a_clear_error_after_exhausting_retries() -> 
         await _generate(service)
 
     assert len(orchestrator.calls) == 2
+
+
+async def test_generate_plan_defaults_to_an_unavailable_cost_estimate_without_a_pricing_service() -> None:
+    orchestrator = _ScriptedOrchestrator([json.dumps(_VALID_PAYLOAD)])
+    service = await _build_service(orchestrator=orchestrator, pricing_service=None)
+
+    plan = await _generate(service)
+
+    # No pricing service was configured - the plan must still generate
+    # successfully (cost estimation is a nice-to-have, not a hard gate),
+    # with an honestly-labeled "unavailable" estimate rather than a
+    # fabricated number or a missing field.
+    assert plan.estimated_cost is not None
+    assert plan.estimated_cost.coverage == "unavailable"
+
+
+async def test_generate_plan_resolves_a_real_cost_estimate_through_the_pricing_service() -> None:
+    from app.discovery.models import CostEstimate
+
+    class _FakePricingService:
+        def __init__(self) -> None:
+            self.received_queries: list[Any] = []
+
+        async def estimate(self, queries: list[Any]) -> CostEstimate:
+            self.received_queries = queries
+            return CostEstimate(region="eastus", monthly_amount=42.5, coverage="complete")
+
+    payload = {
+        **_VALID_PAYLOAD,
+        "pricing_queries": [
+            {
+                "service_name": "Azure App Service",
+                "arm_region_name": "eastus",
+                "units_per_month": 730,
+                "assumption": "One always-on P1v3 instance.",
+            }
+        ],
+    }
+    orchestrator = _ScriptedOrchestrator([json.dumps(payload)])
+    pricing_service = _FakePricingService()
+    service = await _build_service(orchestrator=orchestrator, pricing_service=pricing_service)
+
+    plan = await _generate(service)
+
+    assert plan.estimated_cost is not None
+    assert plan.estimated_cost.monthly_amount == 42.5
+    assert plan.estimated_cost.coverage == "complete"
+    assert len(pricing_service.received_queries) == 1
+
+
+async def test_generate_plan_builds_the_proposed_component_graph() -> None:
+    payload = {
+        **_VALID_PAYLOAD,
+        "proposed_components": [
+            {
+                "id": "billing-module",
+                "name": "Billing module",
+                "responsibility": "Owns invoicing and payment logic.",
+                "extracted": False,
+                "depends_on": [],
+            },
+            {
+                "id": "notifications-service",
+                "name": "Notifications service",
+                "responsibility": "Sends transactional emails independently of billing load.",
+                "extracted": True,
+                "depends_on": ["billing-module"],
+            },
+        ],
+    }
+    orchestrator = _ScriptedOrchestrator([json.dumps(payload)])
+    service = await _build_service(orchestrator=orchestrator)
+
+    plan = await _generate(service)
+
+    assert len(plan.proposed_components) == 2
+    extracted = next(c for c in plan.proposed_components if c.extracted)
+    assert extracted.id == "notifications-service"
+    assert extracted.depends_on == ["billing-module"]
+
+
+async def test_generate_plan_rejects_a_proposed_component_depending_on_an_unknown_id() -> None:
+    payload = {
+        **_VALID_PAYLOAD,
+        "proposed_components": [
+            {
+                "id": "billing-module",
+                "name": "Billing module",
+                "responsibility": "Owns invoicing and payment logic.",
+                "extracted": False,
+                "depends_on": ["does-not-exist"],
+            },
+        ],
+    }
+    orchestrator = _ScriptedOrchestrator([json.dumps(payload), json.dumps(payload)])
+    service = await _build_service(orchestrator=orchestrator)
+
+    with pytest.raises(ModernizationError):
+        await _generate(service)

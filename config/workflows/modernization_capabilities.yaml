@@ -63,7 +63,7 @@ capabilities:
       Preserve the application's existing architecture, module boundaries, and
       business behavior.
   - id: monolith_modularization
-    name: Monolith to modular monolith
+    name: Monolith to modular
     description: >-
       Introduce internal module boundaries inside an existing monolith and
       propose service extraction only where a demonstrable independent-scaling,

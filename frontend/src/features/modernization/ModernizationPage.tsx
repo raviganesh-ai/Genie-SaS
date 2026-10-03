@@ -16,6 +16,7 @@ import {
 } from "@fluentui/react-components";
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { ErrorState } from "@/components/ErrorState";
+import { ModernizationArchitectureGraph } from "@/features/modernization/ModernizationArchitectureGraph";
 import { approvalApi } from "@/services/approvalApi";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
@@ -74,6 +75,24 @@ export function ModernizationPage(): JSX.Element {
   const [capabilityId, setCapabilityId] = useState("");
   const [target, setTarget] = useState("");
   const [working, setWorking] = useState(false);
+  // Both the Foundry Build Agent plan-generation call and the subsequent
+  // branch/push/PR execution are real, often 30-45+ second operations
+  // (confirmed via live testing) - without a visible animation, the only
+  // feedback was the button going gray/disabled, which looked frozen/stuck
+  // rather than actively working (see the AgentActivityAnimation already
+  // used for the auto dependency assessment below, for the same reason).
+  // Tracked separately (not just one shared label) so the animation shows
+  // up next to whichever action is actually in flight - generation in the
+  // form card, execution under the specific plan being executed.
+  const [generatingStartedAt, setGeneratingStartedAt] = useState<string | null>(null);
+  const [executingPlanId, setExecutingPlanId] = useState<string | null>(null);
+  const [executingStartedAt, setExecutingStartedAt] = useState<string | null>(null);
+  // Tracks which approval request an inline Approve/Reject click is
+  // currently deciding, so the user can make that governance call-to-action
+  // directly on this page (see the decide() callback below) instead of
+  // needing to understand/navigate to a separate Governance page just to
+  // unblock their own plan.
+  const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
   const [assessing, setAssessing] = useState(false);
   const [assessingStartedAt, setAssessingStartedAt] = useState<string | null>(null);
   const [error, setError] = useState<SafeError | null>(null);
@@ -190,6 +209,7 @@ export function ModernizationPage(): JSX.Element {
       (capability.target_label && !target.trim())
     ) return;
     setWorking(true);
+    setGeneratingStartedAt(new Date().toISOString());
     setError(null);
     try {
       const plan = await modernizationApi.generate(sessionId, {
@@ -211,6 +231,7 @@ export function ModernizationPage(): JSX.Element {
       setError(err instanceof ApiError ? err : { message: "Foundry plan generation failed." });
     } finally {
       setWorking(false);
+      setGeneratingStartedAt(null);
     }
   }, [
     sessionId,
@@ -227,6 +248,8 @@ export function ModernizationPage(): JSX.Element {
     async (planId: string) => {
       if (!sessionId) return;
       setWorking(true);
+      setExecutingPlanId(planId);
+      setExecutingStartedAt(new Date().toISOString());
       setError(null);
       try {
         const plan = await modernizationApi.execute(sessionId, planId);
@@ -247,6 +270,27 @@ export function ModernizationPage(): JSX.Element {
         void load();
       } finally {
         setWorking(false);
+        setExecutingPlanId(null);
+        setExecutingStartedAt(null);
+      }
+    },
+    [sessionId, load],
+  );
+
+  const decide = useCallback(
+    async (approvalId: string, decision: "approved" | "rejected") => {
+      if (!sessionId) return;
+      setDecidingApprovalId(approvalId);
+      setError(null);
+      try {
+        await approvalApi.decide(sessionId, approvalId, decision);
+        await load();
+      } catch (err) {
+        setError(
+          err instanceof ApiError ? err : { message: "Recording the governance decision failed." },
+        );
+      } finally {
+        setDecidingApprovalId(null);
       }
     },
     [sessionId, load],
@@ -400,6 +444,13 @@ export function ModernizationPage(): JSX.Element {
         >
           Generate Foundry modernization plan
         </Button>
+        {generatingStartedAt ? (
+          <AgentActivityAnimation
+            label="Azure AI Foundry is generating the modernization plan..."
+            startedAt={generatingStartedAt}
+            fallbackDetail="Larger repositories and more complex plans can take several minutes - this is still working."
+          />
+        ) : null}
       </Card>
       {plans.map((plan) => {
         // A plan's own `status` field stays "pending_approval" for its
@@ -409,6 +460,18 @@ export function ModernizationPage(): JSX.Element {
         // is actually gated on server-side.
         const approval = approvals.find((item) => item.id === plan.approval_request_id);
         const isApproved = approval?.status === "approved";
+        const isRejected = approval?.status === "rejected";
+        const isDeciding = decidingApprovalId === approval?.id;
+        const cost = plan.estimated_cost;
+        const currencyFormatter = cost
+          ? new Intl.NumberFormat("en-US", {
+              style: "currency",
+              currency: cost.currency_code,
+              maximumFractionDigits: 2,
+            })
+          : null;
+        const formatCost = (amount: number | null) =>
+          amount === null || !currencyFormatter ? "Unavailable" : currencyFormatter.format(amount);
         return (
           <Card className="repository-intake-card" key={plan.id}>
             <div className="dependency-mapping-heading">
@@ -420,6 +483,64 @@ export function ModernizationPage(): JSX.Element {
               {plan.capability_name ?? "Legacy modernization plan"}
               {plan.target ? `: ${plan.target}` : ""}
             </Text>
+            {plan.rewrite_strategy ? (
+              <div>
+                <Text weight="semibold">Rewrite strategy</Text>
+                <Text block size={300}>{plan.rewrite_strategy}</Text>
+              </div>
+            ) : null}
+            {plan.proposed_components.length > 0 ? (
+              <ModernizationArchitectureGraph components={plan.proposed_components} />
+            ) : null}
+            {plan.deployment_plan.length > 0 ? (
+              <div>
+                <Text weight="semibold">Deployment plan</Text>
+                <ol style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                  {plan.deployment_plan.map((step, index) => (
+                    <li key={index}><Text size={300}>{step}</Text></li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+            {plan.residual_risks.length > 0 ? (
+              <div>
+                <Text weight="semibold">Constraints and residual risks</Text>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                  {plan.residual_risks.map((risk, index) => (
+                    <li key={index}><Text size={300}>{risk}</Text></li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {cost ? (
+              <div className="modernization-cost">
+                <div className="dependency-mapping-heading">
+                  <Text weight="semibold">Estimated cost of modernization</Text>
+                  <Badge appearance="outline">{cost.coverage} retail pricing coverage</Badge>
+                </div>
+                <div style={{ display: "flex", gap: 24 }}>
+                  <div>
+                    <Text size={200} style={{ opacity: 0.72 }}>Estimated monthly</Text>
+                    <Text size={500} weight="bold" block>{formatCost(cost.monthly_amount)}</Text>
+                  </div>
+                  <div>
+                    <Text size={200} style={{ opacity: 0.72 }}>Estimated annual</Text>
+                    <Text size={500} weight="bold" block>{formatCost(cost.annual_amount)}</Text>
+                  </div>
+                </div>
+                {cost.assumptions.length > 0 ? (
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                    {cost.assumptions.map((assumption, index) => (
+                      <li key={index}><Text size={200} style={{ opacity: 0.72 }}>{assumption}</Text></li>
+                    ))}
+                  </ul>
+                ) : null}
+                <Text size={200} style={{ opacity: 0.55 }}>
+                  Azure consumption estimate only; implementation, support, taxes, and negotiated
+                  discounts are excluded.
+                </Text>
+              </div>
+            ) : null}
             <Text>{plan.changes.length} complete file change(s) on {plan.branch_name}</Text>
             {plan.changes.map((change) => (
               <div className="standards-rule" key={change.path}>
@@ -432,22 +553,53 @@ export function ModernizationPage(): JSX.Element {
                 Open draft pull request
               </Link>
             ) : plan.status === "pending_approval" && !isApproved ? (
-              <MessageBar intent={approval?.status === "rejected" ? "error" : "warning"}>
+              <MessageBar intent={isRejected ? "error" : "warning"}>
                 <MessageBarBody>
-                  {approval?.status === "rejected"
-                    ? "This plan's governance approval request was rejected - it cannot be executed."
-                    : "Awaiting Governance approval before this plan can be executed."}{" "}
-                  <Link onClick={() => navigate("/phases")}>Review in Governance</Link>
+                  <Text weight="semibold" block>
+                    {isRejected
+                      ? "This plan's governance approval was rejected - it cannot be executed."
+                      : "Your decision is needed before this plan can be executed."}
+                  </Text>
+                  {!isRejected && approval ? (
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <Button
+                        appearance="primary"
+                        disabled={isDeciding}
+                        onClick={() => void decide(approval.id, "approved")}
+                      >
+                        Approve and allow execution
+                      </Button>
+                      <Button
+                        appearance="secondary"
+                        disabled={isDeciding}
+                        onClick={() => void decide(approval.id, "rejected")}
+                      >
+                        Reject this plan
+                      </Button>
+                    </div>
+                  ) : null}
+                  <Text size={200} style={{ display: "block", marginTop: 8 }}>
+                    <Link onClick={() => navigate("/phases")}>View the full governance trace</Link>
+                  </Text>
                 </MessageBarBody>
               </MessageBar>
             ) : (
-              <Button
-                appearance="primary"
-                disabled={working || plan.status !== "pending_approval"}
-                onClick={() => void execute(plan.id)}
-              >
-                Execute after Governance approval
-              </Button>
+              <>
+                <Button
+                  appearance="primary"
+                  disabled={working || plan.status !== "pending_approval"}
+                  onClick={() => void execute(plan.id)}
+                >
+                  Execute after Governance approval
+                </Button>
+                {executingPlanId === plan.id ? (
+                  <AgentActivityAnimation
+                    label="Creating the branch, pushing files, and opening the draft pull request..."
+                    startedAt={executingStartedAt}
+                    fallbackDetail="This can take a little while - this is still working."
+                  />
+                ) : null}
+              </>
             )}
           </Card>
         );

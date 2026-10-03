@@ -5,6 +5,36 @@ import { ModernizationPage } from "@/features/modernization/ModernizationPage";
 import { mockFetchSequence, renderWithProviders } from "./testUtils";
 import { FIXTURE_SESSION_ID } from "./fixtures";
 
+const BASE_PLAN = {
+  id: "plan-1",
+  session_id: FIXTURE_SESSION_ID,
+  binding_id: "binding-1",
+  assessment_id: "assessment-1",
+  repository_full_name: "raviganesh-ai/lumen-grove-demo",
+  base_commit: "a".repeat(40),
+  base_ref: "main",
+  goal: "Upgrade the runtime.",
+  capability_id: "runtime_upgrade",
+  capability_name: "Language or runtime upgrade",
+  target: "Python 3.12",
+  summary: "Upgraded the runtime.",
+  rewrite_strategy: "Upgrade in place; no architectural change is required.",
+  proposed_components: [],
+  deployment_plan: ["Merge the draft pull request after review.", "Deploy as usual."],
+  changes: [{ path: "README.md", content: "Upgraded.", reason: "evidence-backed" }],
+  validation_commands: ["pytest"],
+  residual_risks: [],
+  rollback: "git revert",
+  pricing_queries: [],
+  estimated_cost: null,
+  branch_name: "genie/modernize-plan1",
+  status: "pending_approval",
+  approval_request_id: "approval-1",
+  pull_request_url: null,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
 describe("ModernizationPage", () => {
   it("offers only configured capabilities instead of a free-text modernization goal", async () => {
     mockFetchSequence([
@@ -20,7 +50,7 @@ describe("ModernizationPage", () => {
           },
           {
             id: "monolith_modularization",
-            name: "Monolith to modular monolith",
+            name: "Monolith to modular",
             description: "Introduce internal module boundaries.",
             target_label: null,
             instruction_template: "Refactor the monolith.",
@@ -124,30 +154,7 @@ describe("ModernizationPage", () => {
   });
 
   it("only enables Execute once the plan's governance approval request is actually approved", async () => {
-    const plan = {
-      id: "plan-1",
-      session_id: FIXTURE_SESSION_ID,
-      binding_id: "binding-1",
-      assessment_id: "assessment-1",
-      repository_full_name: "raviganesh-ai/lumen-grove-demo",
-      base_commit: "a".repeat(40),
-      base_ref: "main",
-      goal: "Upgrade the runtime.",
-      capability_id: "runtime_upgrade",
-      capability_name: "Language or runtime upgrade",
-      target: "Python 3.12",
-      summary: "Upgraded the runtime.",
-      changes: [{ path: "README.md", content: "Upgraded.", reason: "evidence-backed" }],
-      validation_commands: ["pytest"],
-      residual_risks: [],
-      rollback: "git revert",
-      branch_name: "genie/modernize-plan1",
-      status: "pending_approval",
-      approval_request_id: "approval-1",
-      pull_request_url: null,
-      created_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:00Z",
-    };
+    const plan = { ...BASE_PLAN };
     const pendingApproval = {
       id: "approval-1",
       checkpoint_id: "modernization-pr-approval",
@@ -172,36 +179,57 @@ describe("ModernizationPage", () => {
 
     renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
 
-    expect(await screen.findByText(/Awaiting Governance approval/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your decision is needed/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Approve and allow execution/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Reject this plan/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Execute after Governance approval/ })).not
       .toBeInTheDocument();
   });
 
-  it("enables Execute once the plan's governance approval request is approved", async () => {
-    const plan = {
-      id: "plan-1",
+  it("lets the user approve the plan inline without leaving the page", async () => {
+    const user = userEvent.setup();
+    const plan = { ...BASE_PLAN };
+    const pendingApproval = {
+      id: "approval-1",
+      checkpoint_id: "modernization-pr-approval",
       session_id: FIXTURE_SESSION_ID,
-      binding_id: "binding-1",
-      assessment_id: "assessment-1",
-      repository_full_name: "raviganesh-ai/lumen-grove-demo",
-      base_commit: "a".repeat(40),
-      base_ref: "main",
-      goal: "Upgrade the runtime.",
-      capability_id: "runtime_upgrade",
-      capability_name: "Language or runtime upgrade",
-      target: "Python 3.12",
-      summary: "Upgraded the runtime.",
-      changes: [{ path: "README.md", content: "Upgraded.", reason: "evidence-backed" }],
-      validation_commands: ["pytest"],
-      residual_risks: [],
-      rollback: "git revert",
-      branch_name: "genie/modernize-plan1",
-      status: "pending_approval",
-      approval_request_id: "approval-1",
-      pull_request_url: null,
-      created_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:00Z",
+      trace_id: "trace-1",
+      requested_by_agent_id: "build-agent",
+      subject_type: "modernization_plan",
+      subject_id: "plan-1",
+      status: "pending",
+      requested_at: "2026-01-01T00:00:00Z",
+      expires_at: null,
     };
+    const approvedApproval = { ...pendingApproval, status: "approved" };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [pendingApproval] },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/approvals/approval-1/decide`,
+        response: { id: "decision-1", request_id: "approval-1", decision: "approved" },
+      },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [approvedApproval] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    const approveButton = await screen.findByRole("button", { name: /Approve and allow execution/ });
+    await user.click(approveButton);
+
+    expect(
+      await screen.findByRole("button", { name: /Execute after Governance approval/ }),
+    ).toBeEnabled();
+  });
+
+  it("enables Execute once the plan's governance approval request is approved", async () => {
+    const plan = { ...BASE_PLAN };
     const approvedApproval = {
       id: "approval-1",
       checkpoint_id: "modernization-pr-approval",
@@ -234,30 +262,7 @@ describe("ModernizationPage", () => {
 
   it("refreshes the plan's displayed state after a failed execute instead of leaving it looking stale", async () => {
     const user = userEvent.setup();
-    const plan = {
-      id: "plan-1",
-      session_id: FIXTURE_SESSION_ID,
-      binding_id: "binding-1",
-      assessment_id: "assessment-1",
-      repository_full_name: "raviganesh-ai/lumen-grove-demo",
-      base_commit: "a".repeat(40),
-      base_ref: "main",
-      goal: "Upgrade the runtime.",
-      capability_id: "runtime_upgrade",
-      capability_name: "Language or runtime upgrade",
-      target: "Python 3.12",
-      summary: "Upgraded the runtime.",
-      changes: [{ path: "README.md", content: "Upgraded.", reason: "evidence-backed" }],
-      validation_commands: ["pytest"],
-      residual_risks: [],
-      rollback: "git revert",
-      branch_name: "genie/modernize-plan1",
-      status: "pending_approval",
-      approval_request_id: "approval-1",
-      pull_request_url: null,
-      created_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:00Z",
-    };
+    const plan = { ...BASE_PLAN };
     const failedPlan = { ...plan, status: "failed" };
     const approvedApproval = {
       id: "approval-1",
@@ -298,5 +303,92 @@ describe("ModernizationPage", () => {
     // (reloaded via load()), not keep showing the stale "pending_approval"
     // badge and an enabled Execute button that would just fail again.
     expect(await screen.findByText("failed")).toBeInTheDocument();
+  });
+
+  it("shows the rewrite strategy, proposed architecture graph, deployment plan, constraints, and estimated cost", async () => {
+    const plan = {
+      ...BASE_PLAN,
+      rewrite_strategy: "Introduce module boundaries along billing/notifications coupling.",
+      proposed_components: [
+        {
+          id: "billing-module",
+          name: "Billing module",
+          responsibility: "Owns invoicing and payment logic.",
+          extracted: false,
+          depends_on: [],
+        },
+        {
+          id: "notifications-service",
+          name: "Notifications service",
+          responsibility: "Sends transactional emails independently of billing load.",
+          extracted: true,
+          depends_on: ["billing-module"],
+        },
+      ],
+      deployment_plan: ["Ship behind a feature flag.", "Run the strangler proxy in shadow mode."],
+      residual_risks: ["Requires a backward-compatible database migration window."],
+      estimated_cost: {
+        currency_code: "USD",
+        region: "eastus",
+        monthly_amount: 42.5,
+        annual_amount: 510,
+        coverage: "complete",
+        assumptions: ["One always-on P1v3 instance."],
+        source_urls: [],
+        retrieved_at: "2026-01-01T00:00:00Z",
+      },
+    };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Rewrite strategy")).toBeInTheDocument();
+    expect(
+      screen.getByText("Introduce module boundaries along billing/notifications coupling."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Proposed architecture")).toBeInTheDocument();
+    expect(
+      screen.getByText((_, element) => element?.textContent === "Billing module\nModule"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) => element?.textContent === "Notifications service\nExtracted service",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Deployment plan")).toBeInTheDocument();
+    expect(screen.getByText("Ship behind a feature flag.")).toBeInTheDocument();
+    expect(screen.getByText("Constraints and residual risks")).toBeInTheDocument();
+    expect(
+      screen.getByText("Requires a backward-compatible database migration window."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Estimated cost of modernization")).toBeInTheDocument();
+    expect(screen.getByText("$42.50")).toBeInTheDocument();
+    expect(screen.getByText("$510.00")).toBeInTheDocument();
+  });
+
+  it("omits the proposed architecture graph when the plan has no components to show", async () => {
+    const plan = { ...BASE_PLAN, proposed_components: [] };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Rewrite strategy")).toBeInTheDocument();
+    expect(screen.queryByText("Proposed architecture")).not.toBeInTheDocument();
   });
 });

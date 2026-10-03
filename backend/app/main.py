@@ -596,6 +596,9 @@ def create_app(
                 resolved_settings.workflows_path
             ),
             platform_reference_repository_store=effective_platform_reference_repository_store,
+            pricing_service=AzureRetailPricingService(
+                endpoint=resolved_settings.azure_retail_prices_endpoint
+            ),
         )
         app.state.phase_tracking_service = PhaseTrackingService(
             catalog=load_phase_catalog(resolved_settings.workflows_path),

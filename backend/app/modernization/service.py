@@ -7,12 +7,18 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.discovery.models import CostEstimate, PricingQuery
+from app.discovery.pricing_service import PricingService
 from app.governance.approval_service import ApprovalService
 from app.governance.governance_service import GovernanceService
 from app.modernization.capabilities import ModernizationCapability, ModernizationCapabilityCatalog
-from app.modernization.models import ModernizationFileChange, ModernizationPlan
+from app.modernization.models import (
+    ModernizationFileChange,
+    ModernizationPlan,
+    ModernizationProposedComponent,
+)
 from app.modernization.parsing import ModernizationAgentResponseError, parse_agent_response
 from app.modernization.repository import ModernizationPlanRepository
 from app.orchestration.agent_orchestrator import AgentOrchestrator
@@ -36,6 +42,17 @@ _NO_ARCHITECTURE_REFERENCE_TEXT = (
     "reference guidance and any available IQ context; do not invent an unsupported reference.)"
 )
 
+# Returned when no PricingService is configured for this environment (it is
+# an optional dependency - see ModernizationService.__init__) - mirrors
+# AzureRetailPricingService.estimate()'s own "no queries" fallback shape, so
+# plan generation always succeeds and the frontend sees one consistent,
+# honestly-labeled "unavailable" cost shape rather than a missing field.
+_PRICING_UNAVAILABLE = CostEstimate(
+    region="unknown",
+    coverage="unavailable",
+    assumptions=["Azure retail pricing is not configured for this environment."],
+)
+
 
 class ModernizationError(RuntimeError):
     """Raised when a governed modernization action cannot complete."""
@@ -45,10 +62,31 @@ class _GeneratedPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     summary: str = Field(min_length=1)
+    rewrite_strategy: str = Field(min_length=1)
+    proposed_components: list[ModernizationProposedComponent] = Field(default_factory=list)
+    deployment_plan: list[str] = Field(min_length=1)
     changes: list[ModernizationFileChange] = Field(min_length=1)
     validation_commands: list[str] = Field(min_length=1)
     residual_risks: list[str] = Field(default_factory=list)
     rollback: str = Field(min_length=1)
+    pricing_queries: list[PricingQuery] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _depends_on_reference_known_components(self) -> _GeneratedPlan:
+        known_ids = {component.id for component in self.proposed_components}
+        unknown = sorted(
+            {
+                dependency
+                for component in self.proposed_components
+                for dependency in component.depends_on
+                if dependency not in known_ids
+            }
+        )
+        if unknown:
+            raise ValueError(
+                f"proposed_components depends_on references unknown component id(s): {unknown}"
+            )
+        return self
 
 
 class ModernizationService:
@@ -67,6 +105,7 @@ class ModernizationService:
         governance_service: GovernanceService,
         capability_catalog: ModernizationCapabilityCatalog,
         platform_reference_repository_store: PlatformReferenceRepositoryStore | None = None,
+        pricing_service: PricingService | None = None,
     ) -> None:
         self._client = client
         self._plan_repository = plan_repository
@@ -80,6 +119,7 @@ class ModernizationService:
         self._governance_service = governance_service
         self._capability_catalog = capability_catalog
         self._platform_reference_repository_store = platform_reference_repository_store
+        self._pricing_service = pricing_service
 
     async def generate_plan(
         self,
@@ -182,6 +222,11 @@ class ModernizationService:
         generated = await self._generate_plan_contents(
             variables=variables, session_id=session_id, trace_id=trace_id
         )
+        estimated_cost = (
+            await self._pricing_service.estimate(generated.pricing_queries)
+            if self._pricing_service is not None
+            else _PRICING_UNAVAILABLE
+        )
 
         now = datetime.now(UTC)
         plan_id = str(uuid4())
@@ -200,10 +245,15 @@ class ModernizationService:
             target=target.strip() if target else None,
             architecture_reference_snapshot_id=architecture_reference_snapshot_id,
             summary=generated.summary,
+            rewrite_strategy=generated.rewrite_strategy,
+            proposed_components=generated.proposed_components,
+            deployment_plan=generated.deployment_plan,
             changes=generated.changes,
             validation_commands=generated.validation_commands,
             residual_risks=generated.residual_risks,
             rollback=generated.rollback,
+            pricing_queries=generated.pricing_queries,
+            estimated_cost=estimated_cost,
             branch_name=f"genie/modernize-{plan_id[:8]}",
             created_at=now,
             updated_at=now,

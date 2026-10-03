@@ -212,6 +212,13 @@ a,
   background: #0f141b;
 }
 
+.modernization-architecture-graph {
+  height: 360px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+  background: #0f141b;
+}
+
 .code-summary-card {
   display: grid;
   gap: 10px;

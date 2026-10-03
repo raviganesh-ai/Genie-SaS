@@ -58,6 +58,9 @@ class _RecordingOrchestrator:
         self.calls.append(variables)
         payload = {
             "summary": self._generated_summary,
+            "rewrite_strategy": "Upgrade in place; no architectural change is required.",
+            "proposed_components": [],
+            "deployment_plan": ["Merge the draft pull request after review.", "Deploy as usual."],
             "changes": [{"path": "README.md", "content": "Upgraded.", "reason": "evidence-backed"}],
             "validation_commands": ["pytest"],
             "residual_risks": [],

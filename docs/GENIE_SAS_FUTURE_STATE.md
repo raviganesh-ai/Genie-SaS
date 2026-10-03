@@ -534,7 +534,7 @@ selects one configured, repository-scoped capability:
 - Modernization strategy recommendation.
 - Rehost to Azure (lift-and-shift).
 - Replatform (swap runtime or hosting foundation).
-- Monolith to modular monolith.
+- Monolith to modular.
 
 Capabilities that require a destination accept only a bounded target value,
 such as a runtime version, framework version, or target Azure hosting
@@ -570,7 +570,7 @@ Azure Monitor, and Application Insights.
 
 ### Monolith modernization
 
-The "Monolith to modular monolith" capability introduces internal module
+The "Monolith to modular" capability introduces internal module
 boundaries along the evidenced coupling and ownership lines in the repository
 assessment. It proposes extracting a component into an independently
 deployed service only where there is a demonstrable independent-scaling,

@@ -32,10 +32,36 @@ prompts:
       Architecture reference (optional, user-supplied): {architecture_reference_text}
 
       Return only one JSON object with this exact shape:
-      {{"summary":"...","changes":[{{"path":"relative/path","content":"complete file content",
-      "reason":"evidence-backed reason"}}],"validation_commands":["real command"],
-      "residual_risks":["..."],"rollback":"..."}}.
-      Each changed file must contain complete replacement content. Do not return Markdown fences.
+      {{"summary":"...","rewrite_strategy":"...","proposed_components":[{{"id":"short-id",
+      "name":"...","responsibility":"...","extracted":false,"depends_on":["other-id"]}}],
+      "deployment_plan":["ordered rollout step"],"changes":[{{"path":"relative/path",
+      "content":"complete file content","reason":"evidence-backed reason"}}],
+      "validation_commands":["real command"],"residual_risks":["..."],"rollback":"...",
+      "pricing_queries":[{{"service_name":"...","retail_service_name":"...",
+      "product_name":"...","arm_region_name":"...","sku_name":"...","meter_name":"...",
+      "unit_of_measure":"...","units_per_month":1,"assumption":"..."}}]}}.
+      rewrite_strategy must explain, in prose, why this approach (not an alternative) was
+      chosen given the evidenced coupling, ownership, and risk in the dependency assessment.
+      proposed_components describes the plan's target architecture as a graph: one entry per
+      module or service in the *proposed* end state (not necessarily every existing file).
+      Each id must be a short, unique, kebab-case identifier referenced only by other entries'
+      depends_on. extracted is true only for a component the plan recommends pulling out into
+      its own independently deployed service; false means it stays inside the existing
+      deployable unit. Only set extracted true when there is a demonstrable independent-scaling,
+      release, ownership, reliability, or security need - do not propose extraction by default.
+      Leave proposed_components empty only when the selected capability has no meaningful
+      decomposition to show (e.g. a plain dependency or runtime version bump). deployment_plan
+      is the ordered, human-readable rollout sequence (e.g. feature-flag rollout, shadow-mode
+      validation, staged cutover, rollback checkpoints) - distinct from the individual file
+      changes and from validation_commands. pricing_queries may contain only service_name,
+      retail_service_name, product_name, arm_region_name, sku_name, meter_name,
+      unit_of_measure, units_per_month, and assumption. Never provide prices: Genie resolves
+      every unit price deterministically from the Azure Retail Prices API and reports missing
+      coverage. Include one query per independently billed Azure service the *proposed*
+      architecture would add, change, or newly require - omit pricing_queries entirely when the
+      capability does not change what is deployed or its hosting costs. Each changed file must
+      contain complete replacement content. Return at most 20 proposed_components, 20
+      deployment_plan steps, and 10 pricing queries. Do not return Markdown fences.
     variables:
       - repository_full_name
       - base_commit

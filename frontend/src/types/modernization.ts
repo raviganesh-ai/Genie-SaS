@@ -1,9 +1,19 @@
+import type { CostEstimate, PricingQuery } from "@/types/discovery";
+
 export interface ModernizationCapability {
   id: string;
   name: string;
   description: string;
   target_label: string | null;
   instruction_template: string;
+}
+
+export interface ModernizationProposedComponent {
+  id: string;
+  name: string;
+  responsibility: string;
+  extracted: boolean;
+  depends_on: string[];
 }
 
 export interface ModernizationPlan {
@@ -21,10 +31,15 @@ export interface ModernizationPlan {
   target: string | null;
   architecture_reference_snapshot_id: string | null;
   summary: string;
+  rewrite_strategy: string;
+  proposed_components: ModernizationProposedComponent[];
+  deployment_plan: string[];
   changes: Array<{ path: string; content: string; reason: string }>;
   validation_commands: string[];
   residual_risks: string[];
   rollback: string;
+  pricing_queries: PricingQuery[];
+  estimated_cost: CostEstimate | null;
   branch_name: string;
   status:
     | "draft"
