@@ -274,7 +274,15 @@ export function DependencyMappingPage(): JSX.Element {
       label: `${edge.type} (${Math.round(edge.confidence * 100)}%)`,
       animated: edge.type === "integrates_with" || edge.type === "depends_on",
       style: { stroke: EDGE_STROKE_COLORS[edge.type] ?? "#6f7b8a" },
-      labelStyle: { fill: "#c8d0da", fontSize: 10 },
+      // ReactFlow's default edge label background rect renders white
+      // regardless of app theme - the previous light-gray labelStyle fill
+      // (#c8d0da) was nearly invisible against that white background
+      // (effectively white-on-white). Set both explicitly: a dark pill
+      // matching the graph's own background, with light, readable text.
+      labelStyle: { fill: "#e6e9ee", fontSize: 10, fontWeight: 600 },
+      labelBgStyle: { fill: "#1b2330", fillOpacity: 0.92 },
+      labelBgPadding: [4, 2] as [number, number],
+      labelBgBorderRadius: 4,
     }));
     return { nodes, edges };
   }, [assessment, showSourceFiles]);
