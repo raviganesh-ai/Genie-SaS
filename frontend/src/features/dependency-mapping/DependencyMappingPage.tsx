@@ -390,7 +390,14 @@ export function DependencyMappingPage(): JSX.Element {
             <div className="dependency-graph">
               <ReactFlow nodes={graph.nodes} edges={graph.edges} fitView>
                 <Background />
-                <MiniMap pannable zoomable />
+                <MiniMap
+                  pannable
+                  zoomable
+                  style={{ background: "#0f141b" }}
+                  maskColor="rgba(15, 20, 27, 0.6)"
+                  nodeColor={(node) => (typeof node.style?.background === "string" ? node.style.background : "#6f7b8a")}
+                  nodeStrokeColor="#2a323d"
+                />
                 <Controls />
               </ReactFlow>
             </div>
