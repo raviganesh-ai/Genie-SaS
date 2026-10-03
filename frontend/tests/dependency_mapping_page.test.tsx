@@ -229,7 +229,7 @@ describe("DependencyMappingPage", () => {
     });
   });
 
-  it("hides individual source files by default but reveals them via the toggle, for a large repository", async () => {
+  it("hides individual source files by default but reveals them via the Files tab, for a large repository", async () => {
     const user = userEvent.setup();
     const sourceFileNodes = Array.from({ length: 40 }, (_, index) => ({
       id: `source_file:${index}`,
@@ -261,18 +261,62 @@ describe("DependencyMappingPage", () => {
     renderWithProviders(<DependencyMappingPage />, { sessionId: FIXTURE_SESSION_ID });
 
     expect(await screen.findByText("Commit pinned")).toBeInTheDocument();
-    // The structural node is always visible, but the 40 individual files
-    // default to hidden - without this, a real several-hundred-file
-    // repository would render an unboundedly tall single column that
-    // breaks ReactFlow's fitView and makes every node invisible.
+    // The structural node is always visible, but the default "Architecture"
+    // view hides the 40 individual files - without this, a real several-
+    // hundred-file repository would render an unboundedly tall single
+    // column that breaks ReactFlow's fitView and makes every node invisible.
     expect(screen.getAllByText("backend").length).toBeGreaterThan(0);
     expect(screen.queryByText("module_0.py")).not.toBeInTheDocument();
 
-    const toggle = screen.getByRole("switch", { name: /Show individual source files \(40\)/i });
-    expect(toggle).not.toBeChecked();
-
-    await user.click(toggle);
+    const filesTab = screen.getByRole("tab", { name: /Files & code coupling/i });
+    await user.click(filesTab);
 
     expect(await screen.findByText("module_0.py")).toBeInTheDocument();
+  });
+
+  it("switches between focused graph views (architecture, dependencies, integrations, files) instead of one mixed graph", async () => {
+    const user = userEvent.setup();
+    const multiTypeAssessment = {
+      ...ASSESSMENT,
+      nodes: [
+        { id: "component:1", type: "component", name: "backend", version: null, path: "backend", attributes: {} },
+        { id: "technology:1", type: "technology", name: "FastAPI", version: null, path: null, attributes: {} },
+        { id: "manifest:1", type: "manifest", name: "pyproject.toml", version: null, path: "pyproject.toml", attributes: {} },
+        { id: "package:1", type: "package", name: "fastapi", version: "^0.115", path: null, attributes: {} },
+        {
+          id: "endpoint:1",
+          type: "integration_endpoint",
+          name: "https://api.example.com/webhook",
+          version: null,
+          path: null,
+          attributes: {},
+        },
+      ],
+    };
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [BINDING] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [multiTypeAssessment] },
+    ]);
+
+    renderWithProviders(<DependencyMappingPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    // Default "Architecture" view: component + technology, not manifest/package/endpoint.
+    expect(await screen.findByText("Commit pinned")).toBeInTheDocument();
+    expect(screen.getAllByText("backend").length).toBeGreaterThan(0);
+    expect(screen.getByText("FastAPI")).toBeInTheDocument();
+    expect(screen.queryByText("pyproject.toml")).not.toBeInTheDocument();
+    expect(screen.queryByText(/fastapi \^0\.115/)).not.toBeInTheDocument();
+    expect(screen.queryByText("https://api.example.com/webhook")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /Dependencies/i }));
+    expect(await screen.findByText("pyproject.toml")).toBeInTheDocument();
+    expect(screen.getByText(/fastapi \^0\.115/)).toBeInTheDocument();
+    expect(screen.queryByText("FastAPI")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://api.example.com/webhook")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /Integrations/i }));
+    expect(await screen.findByText("https://api.example.com/webhook")).toBeInTheDocument();
+    expect(screen.queryByText("FastAPI")).not.toBeInTheDocument();
+    expect(screen.queryByText("pyproject.toml")).not.toBeInTheDocument();
   });
 });

@@ -11,14 +11,14 @@ import {
   MessageBarTitle,
   Option,
   Spinner,
-  Switch,
+  Tab,
+  TabList,
   Text,
   Title2,
 } from "@fluentui/react-components";
 import ReactFlow, {
   Background,
   Controls,
-  MiniMap,
   type Edge,
   type Node,
 } from "reactflow";
@@ -55,6 +55,46 @@ const EDGE_STROKE_COLORS: Partial<Record<DependencyEdgeType, string>> = {
   integrates_with: "#d35f5f",
   depends_on: "#c77dff",
 };
+
+// Multiple focused "lenses" over the same evidence graph, rather than one
+// giant graph mixing every node type together - each answers a different
+// "help me understand this code" question on its own, uncluttered canvas.
+type GraphViewId = "architecture" | "dependencies" | "integrations" | "files";
+
+interface GraphViewDefinition {
+  id: GraphViewId;
+  label: string;
+  description: string;
+  nodeTypes: DependencyNodeType[];
+}
+
+const GRAPH_VIEWS: GraphViewDefinition[] = [
+  {
+    id: "architecture",
+    label: "Architecture",
+    description: "How the repository is organized into components, and what each is built on.",
+    nodeTypes: ["repository", "component", "technology"],
+  },
+  {
+    id: "dependencies",
+    label: "Dependencies",
+    description: "The manifests and external packages each component declares.",
+    nodeTypes: ["repository", "component", "manifest", "package"],
+  },
+  {
+    id: "integrations",
+    label: "Integrations",
+    description: "External systems and endpoints each component integrates with.",
+    nodeTypes: ["repository", "component", "integration_endpoint"],
+  },
+  {
+    id: "files",
+    label: "Files & code coupling",
+    description:
+      "Individual source files and any cross-component dependencies Genie detected between them.",
+    nodeTypes: ["repository", "component", "manifest", "source_file"],
+  },
+];
 
 const COVERAGE_GAP_LABELS: Record<string, string> = {
   unreadable_content: "Files that could not be read",
@@ -121,13 +161,12 @@ export function DependencyMappingPage(): JSX.Element {
   const [chatDraft, setChatDraft] = useState("");
   const [chatAsking, setChatAsking] = useState(false);
   const [chatError, setChatError] = useState<SafeError | null>(null);
-  // Individual source files/manifests are the vast majority of nodes in any
-  // real repository (hundreds, vs. a handful of components/technologies/
-  // packages) - defaulting them OFF keeps the graph legible out of the box;
-  // the component/technology/package/endpoint "structural" view already
-  // answers "how is this codebase organized and what does it depend on"
-  // without forcing a render of every single file.
-  const [showSourceFiles, setShowSourceFiles] = useState(false);
+  // Default to the "Architecture" lens - a handful of components/
+  // technologies answers "how is this codebase organized" without forcing
+  // a render of every manifest/package/file; the other lenses (reached via
+  // the tabs below the graph) narrow to dependencies, integrations, or
+  // individual files on demand.
+  const [graphView, setGraphView] = useState<GraphViewId>("architecture");
 
   const runAssessmentFor = useCallback(
     async (bindingId: string) => {
@@ -221,9 +260,9 @@ export function DependencyMappingPage(): JSX.Element {
 
   const graph = useMemo(() => {
     if (!assessment) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const visibleAssessmentNodes = showSourceFiles
-      ? assessment.nodes
-      : assessment.nodes.filter((node) => node.type !== "source_file");
+    const activeView = GRAPH_VIEWS.find((view) => view.id === graphView) ?? GRAPH_VIEWS[0];
+    const activeNodeTypes = new Set<DependencyNodeType>(activeView.nodeTypes);
+    const visibleAssessmentNodes = assessment.nodes.filter((node) => activeNodeTypes.has(node.type));
     const visibleNodeIds = new Set(visibleAssessmentNodes.map((node) => node.id));
     const visibleEdges = assessment.edges.filter(
       (edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
@@ -285,7 +324,17 @@ export function DependencyMappingPage(): JSX.Element {
       labelBgBorderRadius: 4,
     }));
     return { nodes, edges };
-  }, [assessment, showSourceFiles]);
+  }, [assessment, graphView]);
+
+  const nodeCountsByView = useMemo(() => {
+    const counts = new Map<GraphViewId, number>();
+    if (!assessment) return counts;
+    GRAPH_VIEWS.forEach((view) => {
+      const nodeTypes = new Set(view.nodeTypes);
+      counts.set(view.id, assessment.nodes.filter((node) => nodeTypes.has(node.type)).length);
+    });
+    return counts;
+  }, [assessment]);
 
   if (!sessionId) {
     return <ErrorState error={{ message: "Create a session before running dependency mapping." }} />;
@@ -378,26 +427,24 @@ export function DependencyMappingPage(): JSX.Element {
                 <Text weight="semibold">{assessment.repository_full_name}</Text>
                 <Text block size={200} className="repository-commit">{assessment.commit}</Text>
               </div>
-              <div className="dependency-graph-controls">
-                <Switch
-                  label={`Show individual source files (${assessment.nodes.filter((node) => node.type === "source_file").length})`}
-                  checked={showSourceFiles}
-                  onChange={(_, data) => setShowSourceFiles(data.checked)}
-                />
-                <Badge color="success">Commit pinned</Badge>
-              </div>
+              <Badge color="success">Commit pinned</Badge>
             </div>
+            <TabList
+              selectedValue={graphView}
+              onTabSelect={(_, data) => setGraphView(data.value as GraphViewId)}
+            >
+              {GRAPH_VIEWS.map((view) => (
+                <Tab key={view.id} value={view.id}>
+                  {view.label} ({nodeCountsByView.get(view.id) ?? 0})
+                </Tab>
+              ))}
+            </TabList>
+            <Text size={200} style={{ opacity: 0.72 }}>
+              {GRAPH_VIEWS.find((view) => view.id === graphView)?.description}
+            </Text>
             <div className="dependency-graph">
               <ReactFlow nodes={graph.nodes} edges={graph.edges} fitView>
                 <Background />
-                <MiniMap
-                  pannable
-                  zoomable
-                  style={{ background: "#0f141b" }}
-                  maskColor="rgba(15, 20, 27, 0.6)"
-                  nodeColor={(node) => (typeof node.style?.background === "string" ? node.style.background : "#6f7b8a")}
-                  nodeStrokeColor="#2a323d"
-                />
                 <Controls />
               </ReactFlow>
             </div>
