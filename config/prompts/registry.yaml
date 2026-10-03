@@ -122,6 +122,57 @@ prompts:
       - question
       - retry_instruction
 
+  - id: modernization-deployment-strategy-v1
+    name: Modernization Real Deployment Strategy
+    description: >-
+      Proposes a concrete Azure Container Apps deployment strategy for an
+      already-approved modernization plan, grounded only in that plan's own
+      changed files (e.g. its Dockerfile) and target - never a fixed
+      template guess.
+    template: >-
+      You are the Build Agent deployed in Azure AI Foundry. A modernization
+      plan has already been approved and its changes pushed to a branch. You
+      must now propose a concrete, real deployment strategy for standing the
+      modernized repository up on Azure Container Apps - the only hosting
+      target this environment can automatically provision. Ground every
+      value in the plan's own changed files below (for example: read its
+      Dockerfile for the exposed port; infer a realistic health_check_path
+      from evidence of a framework health endpoint such as Spring Boot
+      Actuator, or fall back to "/" when there is no such evidence - never
+      invent an endpoint that is not evidenced). Do not propose secrets or
+      credentials as plain environment_variables; mark anything sensitive
+      with secret:true and leave its value as an empty string, since real
+      secret values are never authored by an agent.
+
+      {retry_instruction}
+
+      Repository: {repository_full_name}
+      Deployment target the plan selected: {target}
+      Capability: {capability_name}
+      Rewrite strategy: {rewrite_strategy}
+      Rollout steps already proposed by the plan: {deployment_plan_json}
+      Changed files (path, reason, and complete content): {changed_files_json}
+
+      Return only one JSON object with this exact shape:
+      {{"resource_app_name":"short-kebab-case-name","container_port":8080,
+      "health_check_path":"/","environment_variables":[{{"name":"...",
+      "value":"...","secret":false}}],"cpu":0.5,"memory":"1Gi","min_replicas":1,
+      "max_replicas":3,"steps":["ordered real deployment step"],
+      "rationale":"evidence-backed explanation of every choice above"}}.
+      resource_app_name must be lowercase kebab-case, at most 20 characters,
+      and must not repeat the word "genie". cpu must be one of the Azure
+      Container Apps supported increments (0.25, 0.5, 0.75, 1, 1.25, 1.5,
+      1.75, 2) and memory must be a matching "<N>Gi" value Azure Container
+      Apps accepts for that cpu value. Return at most 10 environment
+      variables and 10 steps. Do not return Markdown fences.
+    variables:
+      - repository_full_name
+      - target
+      - capability_name
+      - rewrite_strategy
+      - deployment_plan_json
+      - changed_files_json
+      - retry_instruction
 
   - id: requirements-extraction-v1
     name: Requirements Extraction

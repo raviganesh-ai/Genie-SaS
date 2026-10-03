@@ -60,3 +60,46 @@ export interface ModernizationPlanChatAnswer {
   referenced_fields: string[];
   generated_at: string;
 }
+
+export interface ModernizationDeploymentEnvironmentVariable {
+  name: string;
+  value: string;
+  secret: boolean;
+}
+
+export interface ModernizationDeploymentStrategy {
+  resource_app_name: string;
+  container_port: number;
+  health_check_path: string;
+  environment_variables: ModernizationDeploymentEnvironmentVariable[];
+  cpu: number;
+  memory: string;
+  min_replicas: number;
+  max_replicas: number;
+  steps: string[];
+  rationale: string;
+}
+
+export type ModernizationDeploymentStatus =
+  | "strategy_proposed"
+  | "pending_approval"
+  | "approved"
+  | "deploying"
+  | "healthy"
+  | "failed";
+
+export interface ModernizationDeployment {
+  id: string;
+  session_id: string;
+  plan_id: string;
+  strategy: ModernizationDeploymentStrategy;
+  status: ModernizationDeploymentStatus;
+  approval_request_id: string | null;
+  image_tag: string | null;
+  container_app_fqdn: string | null;
+  health_check_url: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+

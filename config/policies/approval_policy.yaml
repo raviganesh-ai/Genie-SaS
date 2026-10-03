@@ -42,6 +42,15 @@ checkpoints:
       creates a branch, pushes generated changes, or opens a pull request.
     required: true
 
+  - id: modernization-deployment-approval
+    name: Modernization Deployment Approval
+    description: >-
+      Human approval of a proposed deployment strategy (target Azure
+      resources, scaling, environment configuration) before Genie
+      provisions real Azure resources and deploys the modernized
+      repository.
+    required: true
+
   - id: nonproduction-release-approval
     name: Non-Production Release Approval
     description: >-

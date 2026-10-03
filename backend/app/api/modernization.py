@@ -6,9 +6,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Header, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.dependencies import get_modernization_service
+from app.api.dependencies import get_modernization_deployment_service, get_modernization_service
 from app.modernization.capabilities import ModernizationCapability
-from app.modernization.models import ModernizationPlan, ModernizationPlanChatAnswer
+from app.modernization.deployment_service import ModernizationDeploymentService
+from app.modernization.models import (
+    ModernizationDeployment,
+    ModernizationPlan,
+    ModernizationPlanChatAnswer,
+)
 from app.modernization.service import ModernizationService
 from app.security.auth_models import AuthenticatedUser
 from app.security.dependencies import get_current_user
@@ -118,3 +123,70 @@ async def execute_modernization_plan(
         requesting_user_id=user.user_id,
         trace_id=x_correlation_id or str(uuid4()),
     )
+
+
+@router.get("/{plan_id}/deployment")
+async def get_modernization_deployment(
+    session_id: str,
+    plan_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    service: ModernizationDeploymentService = Depends(get_modernization_deployment_service),
+) -> ModernizationDeployment | None:
+    return await service.get_deployment(
+        session_id=session_id,
+        plan_id=plan_id,
+        requesting_user_id=user.user_id,
+    )
+
+
+@router.post("/{plan_id}/deployment-strategy", status_code=status.HTTP_201_CREATED)
+async def propose_modernization_deployment_strategy(
+    session_id: str,
+    plan_id: str,
+    x_correlation_id: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+    service: ModernizationDeploymentService = Depends(get_modernization_deployment_service),
+) -> ModernizationDeployment:
+    return await service.propose_strategy(
+        session_id=session_id,
+        plan_id=plan_id,
+        requesting_user_id=user.user_id,
+        trace_id=x_correlation_id or str(uuid4()),
+    )
+
+
+@router.post("/{plan_id}/deployment/{deployment_id}/request")
+async def request_modernization_deployment(
+    session_id: str,
+    plan_id: str,
+    deployment_id: str,
+    x_correlation_id: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+    service: ModernizationDeploymentService = Depends(get_modernization_deployment_service),
+) -> ModernizationDeployment:
+    del plan_id
+    return await service.request_deployment(
+        session_id=session_id,
+        deployment_id=deployment_id,
+        requesting_user_id=user.user_id,
+        trace_id=x_correlation_id or str(uuid4()),
+    )
+
+
+@router.post("/{plan_id}/deployment/{deployment_id}/execute")
+async def execute_modernization_deployment(
+    session_id: str,
+    plan_id: str,
+    deployment_id: str,
+    x_correlation_id: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+    service: ModernizationDeploymentService = Depends(get_modernization_deployment_service),
+) -> ModernizationDeployment:
+    del plan_id
+    return await service.execute_deployment(
+        session_id=session_id,
+        deployment_id=deployment_id,
+        requesting_user_id=user.user_id,
+        trace_id=x_correlation_id or str(uuid4()),
+    )
+

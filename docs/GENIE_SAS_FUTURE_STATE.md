@@ -576,6 +576,37 @@ assessment. It proposes extracting a component into an independently
 deployed service only where there is a demonstrable independent-scaling,
 release, ownership, reliability, or security need, preferring a
 strangler-pattern approach for any such extraction over a single cutover.
+Once its pull request is open, the experience presents its own proposed
+rollout steps as a local, client-side checklist so the user can track
+progress through them - this capability does not provision new
+infrastructure itself, so it has no separate deployment or approval step.
+
+### Real deployment verification (Rehost and Replatform)
+
+For the Rehost and Replatform capabilities specifically, once a plan's pull
+request has been opened Genie goes beyond proposing code changes: it offers
+to actually stand the modernized branch up on real Azure infrastructure and
+prove it works, rather than stopping at a document or a merged diff the user
+still has to deploy and verify by hand.
+
+- Genie (the Foundry Build Agent) proposes a concrete deployment strategy
+  grounded only in the plan's own changed files - for example, reading the
+  plan's generated Dockerfile for its exposed port, and inferring a
+  health-check path only from real evidence (a framework health endpoint) or
+  falling back to a plain "is it serving HTTP" check rather than guessing.
+- Provisioning real, billable Azure resources is a separate, independently
+  approvable governance decision from the plan's own pull-request approval -
+  a distinct checkpoint gates it before anything is built or deployed.
+- Once approved, Genie builds the plan's pushed branch directly from its
+  GitHub source in Azure Container Registry and deploys the resulting image
+  as a real Azure Container App - then polls the live app until it actually
+  responds, rather than declaring success once the deployment call returns.
+- Honest scope limits, surfaced in the experience rather than hidden: today
+  this only automates deployment to Azure Container Apps (the only
+  container-hosting target this environment provisions out of the box) and
+  only works end-to-end for public GitHub repositories; other hosting
+  targets and private repositories remain strategy-only until that plumbing
+  is added.
 
 ### Deployment assets
 

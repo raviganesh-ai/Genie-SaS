@@ -265,6 +265,40 @@ a,
   border-radius: 8px;
 }
 
+.modernization-deployment-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+  background: #111820;
+}
+
+.modernization-deployment-strategy {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+}
+
+.modernization-walkthrough {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+  background: #111820;
+}
+
+.modernization-walkthrough-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .dependency-chat-log {
   display: grid;
   gap: 8px;

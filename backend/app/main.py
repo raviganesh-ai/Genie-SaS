@@ -92,6 +92,14 @@ from app.modernization.repository import (
     CosmosModernizationPlanRepository,
     InMemoryModernizationPlanRepository,
 )
+from app.modernization.deployment_repository import (
+    CosmosModernizationDeploymentRepository,
+    InMemoryModernizationDeploymentRepository,
+)
+from app.modernization.deployment_service import (
+    ModernizationDeploymentError,
+    create_modernization_deployment_service,
+)
 from app.modernization.capabilities import load_modernization_capabilities
 from app.modernization.service import ModernizationService
 from app.production_promotion.repository import (
@@ -244,6 +252,7 @@ def create_app(
         platform_reference_repository_store = None
         iq_evidence_repository = None
         modernization_plan_repository = None
+        modernization_deployment_repository = None
         production_promotion_repository = None
         phase_task_state_repository = None
         governance_event_repository = None
@@ -274,6 +283,9 @@ def create_app(
             )
             iq_evidence_repository = CosmosIqEvidenceRepository(store=document_store)
             modernization_plan_repository = CosmosModernizationPlanRepository(store=document_store)
+            modernization_deployment_repository = CosmosModernizationDeploymentRepository(
+                store=document_store
+            )
             production_promotion_repository = CosmosProductionPromotionRepository(
                 store=document_store
             )
@@ -290,6 +302,12 @@ def create_app(
         )
         effective_platform_reference_repository_store = (
             platform_reference_repository_store or InMemoryPlatformReferenceRepositoryStore()
+        )
+        effective_modernization_plan_repository = (
+            modernization_plan_repository or InMemoryModernizationPlanRepository()
+        )
+        effective_modernization_deployment_repository = (
+            modernization_deployment_repository or InMemoryModernizationDeploymentRepository()
         )
         orchestrator = create_agent_orchestrator(
             settings=resolved_settings,
@@ -582,8 +600,7 @@ def create_app(
         )
         app.state.modernization_service = ModernizationService(
             client=github_mcp_client,
-            plan_repository=modernization_plan_repository
-            or InMemoryModernizationPlanRepository(),
+            plan_repository=effective_modernization_plan_repository,
             binding_repository=effective_binding_repository,
             assessment_repository=effective_assessment_repository,
             standards_repository=effective_standards_repository,
@@ -600,6 +617,22 @@ def create_app(
                 endpoint=resolved_settings.azure_retail_prices_endpoint
             ),
         )
+        # Real deployment is an additive capability on top of modernization
+        # plans, not a core required one - unlike create_backend_deployment_
+        # service (always called, always fails closed), missing settings
+        # here simply leave this feature unavailable (503 via
+        # get_modernization_deployment_service) rather than aborting startup.
+        try:
+            app.state.modernization_deployment_service = create_modernization_deployment_service(
+                settings=resolved_settings,
+                plan_repository=effective_modernization_plan_repository,
+                deployment_repository=effective_modernization_deployment_repository,
+                orchestrator=orchestrator,
+                approval_service=orchestrator.approval_service,
+                governance_service=orchestrator.governance_service,
+            )
+        except ModernizationDeploymentError:
+            app.state.modernization_deployment_service = None
         app.state.phase_tracking_service = PhaseTrackingService(
             catalog=load_phase_catalog(resolved_settings.workflows_path),
             repository=phase_task_state_repository or InMemoryPhaseTaskStateRepository(),

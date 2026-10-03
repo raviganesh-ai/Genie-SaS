@@ -19,6 +19,7 @@ from app.iq.delegated_connection_service import DelegatedConnectionService
 from app.iq.iq_diagnostics_service import IqDiagnosticsService
 from app.iq.work_iq_validation_service import WorkIqValidationService
 from app.memory.memory_service import MemoryService
+from app.modernization.deployment_service import ModernizationDeploymentService
 from app.modernization.service import ModernizationService
 from app.production_promotion.service import ProductionPromotionService
 from app.iq.service import IqEvidenceService
@@ -142,6 +143,16 @@ def get_iq_evidence_service(request: Request) -> IqEvidenceService:
 
 def get_modernization_service(request: Request) -> ModernizationService:
     return request.app.state.modernization_service
+
+
+def get_modernization_deployment_service(request: Request) -> ModernizationDeploymentService:
+    service = getattr(request.app.state, "modernization_deployment_service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Real modernization deployment is not configured for this environment.",
+        )
+    return service
 
 
 def get_production_promotion_service(request: Request) -> ProductionPromotionService:

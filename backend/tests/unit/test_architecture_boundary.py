@@ -30,6 +30,13 @@ directly, each isolating that SDK behind its own interface:
   ContainerRegistryManagementClient / ContainerAppsAPIClient /
   DefaultAzureCredential lifecycle for the Deploy & Launch pipeline's real
   ACR build + Container Apps deploy steps.
+- ``app/modernization/deployment_service.py`` owns the
+  ContainerRegistryManagementClient / ContainerAppsAPIClient /
+  DefaultAzureCredential lifecycle for actually provisioning a real,
+  governance-gated Azure Container App from an already-approved
+  modernization plan's own pushed branch - a separate real-infrastructure
+  flow from the Deploy & Launch pipeline above, scoped to third-party
+  repositories rather than Genie's own generated missions.
 - ``app/deploy_launch/prototype_api_gateway_service.py`` owns the Network,
   Private DNS, Container Apps environment, and API Management clients used
   to create each prototype's isolated gateway and private backend network.
@@ -75,6 +82,7 @@ _ALLOWED_RELATIVE_PATHS = {
     Path("services/document_understanding_service.py"),
     Path("transcription/speech_service.py"),
     Path("deploy_launch/backend_deployment_service.py"),
+    Path("modernization/deployment_service.py"),
     Path("deploy_launch/prototype_api_gateway_service.py"),
     Path("deploy_launch/frontend_deployment_service.py"),
     Path("deploy_launch/container_app_frontend_deployment_service.py"),

@@ -17,7 +17,9 @@ import {
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { ErrorState } from "@/components/ErrorState";
 import { ModernizationArchitectureGraph } from "@/features/modernization/ModernizationArchitectureGraph";
+import { ModernizationDeploymentPanel } from "@/features/modernization/ModernizationDeploymentPanel";
 import { ModernizationPlanChat } from "@/features/modernization/ModernizationPlanChat";
+import { ModernizationWalkthrough } from "@/features/modernization/ModernizationWalkthrough";
 import { approvalApi } from "@/services/approvalApi";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
@@ -46,6 +48,14 @@ const CAPABILITY_TARGET_OPTIONS: Record<string, string[]> = {
     "Azure Functions",
   ],
 };
+
+/** Capabilities whose target is standing the workload up on new hosting -
+ * these are the only ones where "what's next" is a real, automatable
+ * Azure Container Apps deployment (see ModernizationDeploymentPanel).
+ * Every other capability either doesn't change what's deployed
+ * (dependency/runtime/framework upgrades) or has its own distinct
+ * walkthrough (monolith_modularization, below). */
+const DEPLOYABLE_CAPABILITY_IDS = new Set(["rehost_lift_and_shift", "replatform"]);
 
 export function ModernizationPage(): JSX.Element {
   const navigate = useNavigate();
@@ -626,9 +636,18 @@ export function ModernizationPage(): JSX.Element {
               />
             ) : null}
             {plan.pull_request_url ? (
-              <Link href={plan.pull_request_url} target="_blank" rel="noreferrer">
-                Open draft pull request
-              </Link>
+              <>
+                <Link href={plan.pull_request_url} target="_blank" rel="noreferrer">
+                  Open draft pull request
+                </Link>
+                {plan.status === "pull_request_opened" && plan.capability_id
+                  && DEPLOYABLE_CAPABILITY_IDS.has(plan.capability_id) ? (
+                  <ModernizationDeploymentPanel sessionId={sessionId} planId={plan.id} />
+                ) : null}
+                {plan.status === "pull_request_opened" && plan.capability_id === "monolith_modularization" ? (
+                  <ModernizationWalkthrough steps={plan.deployment_plan} />
+                ) : null}
+              </>
             ) : plan.status === "pending_approval" && !isApproved ? (
               <MessageBar intent={isRejected ? "error" : "warning"}>
                 <MessageBarBody>

@@ -129,3 +129,70 @@ class ModernizationPlanChatAnswer(BaseModel):
     referenced_fields: list[str] = Field(default_factory=list)
     generated_at: datetime
 
+
+ModernizationDeploymentStatus = Literal[
+    "strategy_proposed", "pending_approval", "approved", "deploying", "healthy", "failed"
+]
+
+
+class ModernizationDeploymentEnvironmentVariable(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    value: str
+    secret: bool = False
+
+
+class ModernizationDeploymentStrategy(BaseModel):
+    """An agent-authored, evidence-grounded plan for actually standing up
+    the modernized repository on the plan's own target Azure hosting
+    service - distinct from the modernization plan's file changes (which
+    only describe what changes inside the repository). Produced by
+    ModernizationDeploymentService.propose_strategy; see that method's
+    docstring for the grounding contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_app_name: str = Field(min_length=1)
+    container_port: int = Field(gt=0, le=65535)
+    health_check_path: str = Field(min_length=1)
+    environment_variables: list[ModernizationDeploymentEnvironmentVariable] = Field(
+        default_factory=list
+    )
+    cpu: float = Field(gt=0)
+    memory: str = Field(min_length=1)
+    min_replicas: int = Field(ge=0)
+    max_replicas: int = Field(gt=0)
+    steps: list[str] = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _replica_bounds_are_sane(self) -> ModernizationDeploymentStrategy:
+        if self.max_replicas < self.min_replicas:
+            raise ValueError("max_replicas must be greater than or equal to min_replicas.")
+        return self
+
+
+class ModernizationDeployment(BaseModel):
+    """Tracks one real-infrastructure deployment attempt for a modernization
+    plan - a separate governance-gated lifecycle from the plan's own
+    pull-request approval (see the "modernization-deployment-approval"
+    checkpoint), since opening a draft PR and actually provisioning real,
+    billable Azure resources are distinct, independently approvable
+    actions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    session_id: str
+    plan_id: str
+    strategy: ModernizationDeploymentStrategy
+    status: ModernizationDeploymentStatus = "strategy_proposed"
+    approval_request_id: str | None = None
+    image_tag: str | None = None
+    container_app_fqdn: str | None = None
+    health_check_url: str | None = None
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+

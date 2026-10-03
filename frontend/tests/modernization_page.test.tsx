@@ -563,4 +563,158 @@ describe("ModernizationPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Reject this plan/ })).toBeInTheDocument();
   });
+
+  it("lets the user propose, approve, and execute a real Container Apps deployment for an opened rehost plan", async () => {
+    const user = userEvent.setup();
+    const plan = {
+      ...BASE_PLAN,
+      capability_id: "rehost_lift_and_shift",
+      capability_name: "Rehost to Azure (lift-and-shift)",
+      target: "Azure Container Apps",
+      status: "pull_request_opened",
+      pull_request_url: "https://github.com/raviganesh-ai/lumen-grove-demo/pull/1",
+    };
+    const strategy = {
+      resource_app_name: "lumen-grove",
+      container_port: 8080,
+      health_check_path: "/",
+      environment_variables: [],
+      cpu: 0.5,
+      memory: "1Gi",
+      min_replicas: 1,
+      max_replicas: 3,
+      steps: ["Build the image.", "Deploy to Container Apps."],
+      rationale: "Dockerfile exposes 8080 with no evidenced health endpoint.",
+    };
+    const proposedDeployment = {
+      id: "deployment-1",
+      session_id: FIXTURE_SESSION_ID,
+      plan_id: "plan-1",
+      strategy,
+      status: "strategy_proposed",
+      approval_request_id: null,
+      image_tag: null,
+      container_app_fqdn: null,
+      health_check_url: null,
+      error: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    const pendingDeployment = {
+      ...proposedDeployment,
+      status: "pending_approval",
+      approval_request_id: "deploy-approval-1",
+    };
+    const pendingDeployApproval = {
+      id: "deploy-approval-1",
+      checkpoint_id: "modernization-deployment-approval",
+      session_id: FIXTURE_SESSION_ID,
+      trace_id: "trace-2",
+      requested_by_agent_id: "build-agent",
+      subject_type: "modernization_deployment",
+      subject_id: "deployment-1",
+      status: "pending",
+      requested_at: "2026-01-01T00:00:00Z",
+      expires_at: null,
+    };
+    const approvedDeployApproval = { ...pendingDeployApproval, status: "approved" };
+    const healthyDeployment = {
+      ...pendingDeployment,
+      status: "healthy",
+      image_tag: "acr123.azurecr.io/lumen-grove:plan-1-a",
+      container_app_fqdn: "lumen-grove.example.azurecontainerapps.io",
+      health_check_url: "https://lumen-grove.example.azurecontainerapps.io/",
+    };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+      { match: "/modernization/plan-1/deployment", response: null },
+      {
+        match: "/modernization/plan-1/deployment-strategy",
+        response: proposedDeployment,
+      },
+      {
+        match: "/modernization/plan-1/deployment/deployment-1/request",
+        response: pendingDeployment,
+      },
+      { match: "/modernization/plan-1/deployment", response: pendingDeployment },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [pendingDeployApproval] },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/approvals/deploy-approval-1/decide`,
+        response: { id: "decision-2", request_id: "deploy-approval-1", decision: "approved" },
+      },
+      { match: "/modernization/plan-1/deployment", response: pendingDeployment },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [approvedDeployApproval] },
+      {
+        match: "/modernization/plan-1/deployment/deployment-1/execute",
+        response: healthyDeployment,
+      },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    const proposeButton = await screen.findByRole("button", {
+      name: /Propose a deployment strategy/,
+    });
+    await user.click(proposeButton);
+
+    expect(await screen.findByText(/Resource name: lumen-grove/)).toBeInTheDocument();
+
+    const requestButton = await screen.findByRole("button", {
+      name: /Request deployment approval/,
+    });
+    await user.click(requestButton);
+
+    const approveButton = await screen.findByRole("button", {
+      name: /Approve and allow deployment/,
+    });
+    await user.click(approveButton);
+
+    const deployButton = await screen.findByRole("button", {
+      name: /Deploy to Azure Container Apps/,
+    });
+    await user.click(deployButton);
+
+    expect(await screen.findByText("This app is live and responding.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open the deployed app/ })).toHaveAttribute(
+      "href",
+      "https://lumen-grove.example.azurecontainerapps.io/",
+    );
+  });
+
+  it("shows a local walkthrough checklist instead of a real deployment panel for an opened modularization plan", async () => {
+    const plan = {
+      ...BASE_PLAN,
+      capability_id: "monolith_modularization",
+      capability_name: "Monolith to modular",
+      target: null,
+      status: "pull_request_opened",
+      pull_request_url: "https://github.com/raviganesh-ai/lumen-grove-demo/pull/2",
+      deployment_plan: ["Ship behind a feature flag.", "Run the strangler proxy in shadow mode."],
+    };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(
+      await screen.findByText(/What's next: walk through this modularization/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: /Ship behind a feature flag\./ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/What's next: deploy this to Azure/)).not.toBeInTheDocument();
+  });
 });

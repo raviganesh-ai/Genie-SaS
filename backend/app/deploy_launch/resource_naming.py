@@ -36,3 +36,13 @@ def prototype_frontend_environment_name(mission_slug: str) -> str:
 
     digest = hashlib.sha256(mission_slug.encode("utf-8")).hexdigest()[:16]
     return f"genie-fe-{digest}"
+
+
+def modernization_deployment_container_app_name(plan_id: str) -> str:
+    """Return a stable Azure Container App name for a modernization plan's own
+    real-deployment Container App - a distinct "genie-modsvc-" prefix keeps
+    these apart from Genie's own prototype Container Apps
+    (``prototype_container_app_name``) in the same subscription."""
+
+    digest = hashlib.sha256(plan_id.encode("utf-8")).hexdigest()[:10]
+    return f"genie-modsvc-{digest}"[:_CONTAINER_APP_NAME_MAX_LENGTH]
