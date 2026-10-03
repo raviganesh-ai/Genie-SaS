@@ -35,6 +35,7 @@ import type {
   RepositoryAssessment,
   RepositoryPurposeBinding,
 } from "@/types/repositoryConnection";
+import { DEPENDENCY_NODE_WIDTH, layoutDependencyGraph } from "./dependencyGraphLayout";
 
 const NODE_COLORS: Record<DependencyNodeType, string> = {
   repository: "#2f83e0",
@@ -55,15 +56,48 @@ const EDGE_STROKE_COLORS: Partial<Record<DependencyEdgeType, string>> = {
   depends_on: "#c77dff",
 };
 
-const NODE_COLUMNS: Record<DependencyNodeType, number> = {
-  repository: 0,
-  component: 1,
-  manifest: 2,
-  source_file: 2,
-  package: 3,
-  technology: 3,
-  integration_endpoint: 4,
+const COVERAGE_GAP_LABELS: Record<string, string> = {
+  unreadable_content: "Files that could not be read",
+  unreadable_directory: "Folders that could not be listed",
+  large_file: "Files skipped for exceeding the size limit",
+  manifest_parse_error: "Manifests that could not be parsed",
+  file_limit: "Assessment stopped at the configured file limit",
 };
+
+// Only a genuinely incomplete assessment (the configured file cap was hit)
+// warrants an alarming "warning" treatment - a handful of individual files
+// Genie could not read or parse is an expected, honestly-reported limit of
+// static analysis, not a sign the application is broken, so it gets a
+// calmer "info" treatment instead of looking like an error per file.
+const ALARMING_COVERAGE_GAP_CATEGORIES = new Set(["file_limit"]);
+
+interface CoverageGapGroup {
+  category: string;
+  title: string;
+  intent: "warning" | "info";
+  fileCount: number;
+  samplePaths: string[];
+  remainingCount: number;
+}
+
+function groupCoverageGaps(
+  gaps: Array<{ category: string; detail: string; paths: string[] }>,
+): CoverageGapGroup[] {
+  const pathsByCategory = new Map<string, string[]>();
+  gaps.forEach((gap) => {
+    const paths = pathsByCategory.get(gap.category) ?? [];
+    paths.push(...(gap.paths.length > 0 ? gap.paths : [gap.detail]));
+    pathsByCategory.set(gap.category, paths);
+  });
+  return Array.from(pathsByCategory.entries()).map(([category, paths]) => ({
+    category,
+    title: COVERAGE_GAP_LABELS[category] ?? category,
+    intent: ALARMING_COVERAGE_GAP_CATEGORIES.has(category) ? "warning" : "info",
+    fileCount: paths.length,
+    samplePaths: paths.slice(0, 5),
+    remainingCount: Math.max(0, paths.length - 5),
+  }));
+}
 
 interface RepositoryChatMessage {
   id: string;
@@ -190,46 +224,58 @@ export function DependencyMappingPage(): JSX.Element {
     const visibleAssessmentNodes = showSourceFiles
       ? assessment.nodes
       : assessment.nodes.filter((node) => node.type !== "source_file");
-    // A square-ish grid (not one unboundedly tall column per type) keeps
-    // the overall bounding box's aspect ratio sane no matter how many
-    // nodes there are - a real several-hundred-file repository's single-
-    // column layout could be tens of thousands of pixels tall, which made
-    // ReactFlow's fitView zoom out so far the nodes became invisible.
-    // Nodes are still sorted by type first, so same-type nodes visually
-    // cluster together within the grid.
-    const sorted = [...visibleAssessmentNodes].sort(
-      (a, b) => NODE_COLUMNS[a.type] - NODE_COLUMNS[b.type],
+    const visibleNodeIds = new Set(visibleAssessmentNodes.map((node) => node.id));
+    const visibleEdges = assessment.edges.filter(
+      (edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
     );
-    const columnsPerRow = Math.max(4, Math.ceil(Math.sqrt(sorted.length)));
-    const visibleNodeIds = new Set(sorted.map((node) => node.id));
-    const nodes: Node[] = sorted.map((node, index) => {
-      const col = index % columnsPerRow;
-      const row = Math.floor(index / columnsPerRow);
+    // Lay out nodes by their real edge structure (repository -> component
+    // -> manifest/source file -> package/technology -> integration
+    // endpoint) instead of an arbitrary type-sorted grid - a grid position
+    // unrelated to what a node is actually connected to produced edges
+    // that crossed the whole canvas and didn't visually read as a
+    // coherent dependency tree.
+    const positions = new Map(
+      layoutDependencyGraph(visibleAssessmentNodes, visibleEdges).map((position) => [
+        position.id,
+        position,
+      ]),
+    );
+    const componentRoleByNodeId = new Map(
+      (assessment.code_summary?.component_roles ?? []).map((role) => [role.component_id, role]),
+    );
+    const nodes: Node[] = visibleAssessmentNodes.map((node) => {
+      const position = positions.get(node.id) ?? { x: 0, y: 0 };
+      const baseLabel = node.version ? `${node.name} ${node.version}` : node.name;
+      // Tie the Genie-generated code summary's per-component role
+      // classification directly into the graph itself (not only the
+      // separate text list above it) by annotating each component node
+      // with its own role.
+      const role = componentRoleByNodeId.get(node.id);
+      const label = role ? `${baseLabel}\n${role.role} (${Math.round(role.confidence * 100)}%)` : baseLabel;
       return {
         id: node.id,
-        position: { x: col * 280, y: row * 100 },
-        data: { label: node.version ? `${node.name} ${node.version}` : node.name },
+        position: { x: position.x, y: position.y },
+        data: { label },
         style: {
           color: "#fff",
           background: NODE_COLORS[node.type],
           border: "1px solid rgba(255,255,255,.35)",
           borderRadius: 8,
-          width: 250,
+          width: DEPENDENCY_NODE_WIDTH,
           fontSize: 12,
+          whiteSpace: "pre-line",
         },
       };
     });
-    const edges: Edge[] = assessment.edges
-      .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
-      .map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        label: `${edge.type} (${Math.round(edge.confidence * 100)}%)`,
-        animated: edge.type === "integrates_with" || edge.type === "depends_on",
-        style: { stroke: EDGE_STROKE_COLORS[edge.type] ?? "#6f7b8a" },
-        labelStyle: { fill: "#c8d0da", fontSize: 10 },
-      }));
+    const edges: Edge[] = visibleEdges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      label: `${edge.type} (${Math.round(edge.confidence * 100)}%)`,
+      animated: edge.type === "integrates_with" || edge.type === "depends_on",
+      style: { stroke: EDGE_STROKE_COLORS[edge.type] ?? "#6f7b8a" },
+      labelStyle: { fill: "#c8d0da", fontSize: 10 },
+    }));
     return { nodes, edges };
   }, [assessment, showSourceFiles]);
 
@@ -342,7 +388,13 @@ export function DependencyMappingPage(): JSX.Element {
             </div>
           </Card>
           <Card className="repository-intake-card">
-            <Text weight="semibold">Coverage and limitations</Text>
+            <div>
+              <Text weight="semibold">Coverage and limitations</Text>
+              <Text size={200} style={{ display: "block", opacity: 0.72 }}>
+                These are expected, honestly-reported limits of static analysis (a handful of
+                files Genie could not read or chose to skip) - not application failures.
+              </Text>
+            </div>
             {assessment.coverage_gaps.length === 0 ? (
               <MessageBar intent="success">
                 <MessageBarBody>
@@ -351,11 +403,12 @@ export function DependencyMappingPage(): JSX.Element {
                 </MessageBarBody>
               </MessageBar>
             ) : (
-              assessment.coverage_gaps.map((gap, index) => (
-                <MessageBar intent="warning" key={`${gap.category}-${index}`}>
+              groupCoverageGaps(assessment.coverage_gaps).map((group) => (
+                <MessageBar intent={group.intent} key={group.category}>
                   <MessageBarBody>
-                    <MessageBarTitle>{gap.category}</MessageBarTitle>
-                    {gap.detail} {gap.paths.slice(0, 3).join(", ")}
+                    <MessageBarTitle>{group.title}</MessageBarTitle>
+                    {group.fileCount} file{group.fileCount === 1 ? "" : "s"} - {group.samplePaths.join(", ")}
+                    {group.remainingCount > 0 ? ` and ${group.remainingCount} more` : ""}
                   </MessageBarBody>
                 </MessageBar>
               ))

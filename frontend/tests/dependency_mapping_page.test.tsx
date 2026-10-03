@@ -134,6 +134,11 @@ describe("DependencyMappingPage", () => {
     expect(screen.getByText("Uses FastAPI")).toBeInTheDocument();
     expect(screen.getByText("API layer")).toBeInTheDocument();
     expect(screen.getAllByText("backend").length).toBeGreaterThan(0);
+    // The component's role is also annotated directly onto its graph node
+    // label (not only listed separately in the text summary above), tying
+    // the code summary's classification into the graph itself.
+    const componentNode = document.querySelector('[data-testid="rf__node-component:1"]');
+    expect(componentNode?.textContent).toBe("backend\nAPI layer (85%)");
   });
 
   it("does not render a code summary card when the assessment has none", async () => {
@@ -146,6 +151,41 @@ describe("DependencyMappingPage", () => {
 
     expect(await screen.findByText("Commit pinned")).toBeInTheDocument();
     expect(screen.queryByText("Code summary")).not.toBeInTheDocument();
+  });
+
+  it("groups repeated coverage gaps into one calm summary per category instead of one alarming card per file", async () => {
+    const assessmentWithGaps = {
+      ...ASSESSMENT,
+      coverage_gaps: [
+        {
+          category: "unreadable_content",
+          detail: "GitHub MCP did not return readable text content.",
+          paths: ["backend/tests/unit/api/__init__.py"],
+        },
+        {
+          category: "unreadable_content",
+          detail: "GitHub MCP did not return readable text content.",
+          paths: ["backend/tests/unit/deployment/__init__.py"],
+        },
+        {
+          category: "file_limit",
+          detail: "Assessment stopped at the configured 500-file limit.",
+          paths: ["extra/file-a.py"],
+        },
+      ],
+    };
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [BINDING] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [assessmentWithGaps] },
+    ]);
+
+    renderWithProviders(<DependencyMappingPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Coverage and limitations")).toBeInTheDocument();
+    // One consolidated card for the two unreadable_content gaps, not two.
+    expect(screen.getByText("Files that could not be read")).toBeInTheDocument();
+    expect(screen.getByText(/2 files/)).toBeInTheDocument();
+    expect(screen.getByText("Assessment stopped at the configured file limit")).toBeInTheDocument();
   });
 
   it("lets the user ask a question about the analyzed repository once code analysis is done", async () => {
