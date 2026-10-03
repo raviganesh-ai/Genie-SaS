@@ -1,6 +1,6 @@
 """Integration tests for RequirementsService's "pending"/"undetermined"
 and unknown-run states, using a real ``AgentOrchestrator`` running the
-hermetic Phase 6 fixture workflows through ``LocalAgentGateway``.
+hermetic Phase 6 fixture workflows through a deterministic test gateway.
 
 "qualified"/"not_qualified" states depend on an agent's own free-text
 reasoning, which ``LocalAgentGateway``'s deterministic stub output never
@@ -14,18 +14,16 @@ from pathlib import Path
 import pytest
 
 from app.models.workflow_models import WorkflowStepInput
-from app.orchestration.agent_orchestrator import create_agent_orchestrator
 from app.services.requirements_service import create_requirements_service
 from app.services.session_service import create_session_service
 from app.services.workshop_service import UnknownWorkflowRunError
 
-from ._orchestration_helpers import build_orchestration_settings
+from ._orchestration_helpers import create_test_agent_orchestrator
 
 
 @pytest.fixture
 def orchestrator(tmp_path: Path):
-    settings = build_orchestration_settings(tmp_path / "config")
-    return create_agent_orchestrator(settings=settings)
+    return create_test_agent_orchestrator(tmp_path / "config")
 
 
 async def _make_session(orchestrator, owner_user_id: str = "user-1"):

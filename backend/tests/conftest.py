@@ -7,6 +7,7 @@ directory used by local development or production deployments.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,7 +29,25 @@ def _write_valid_config_tree(root: Path) -> None:
         "    name: Test Agent\n"
         "    role: test_role\n"
         "    description: A minimal valid agent used for testing.\n"
-        "    model_deployment_ref: test-model\n",
+        "    model_deployment_ref: test-model\n"
+        "    foundry_agent_id: test-agent-foundry\n"
+        "    owner: genie-tests\n"
+        "    governance_policy_id: test-governance-policy\n"
+        "    prompt_template_ref: test-prompt\n"
+        "    memory_access:\n"
+        "      - shared\n"
+        "  - id: genie-orchestrator\n"
+        "    name: Genie Orchestrator\n"
+        "    role: mission_orchestration\n"
+        "    description: Coordinates test workflows.\n"
+        "    model_deployment_ref: test-model\n"
+        "    foundry_agent_id: genie-orchestrator-foundry\n"
+        "    owner: genie-tests\n"
+        "    governance_policy_id: test-governance-policy\n"
+        "    prompt_template_ref: test-prompt\n"
+        "    memory_access:\n"
+        "      - shared\n"
+        "      - personal\n",
         encoding="utf-8",
     )
     (prompts_dir / "registry.yaml").write_text(
@@ -104,7 +123,7 @@ def valid_config_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def local_settings(valid_config_root: Path) -> Settings:
-    """Settings representing a safe local development configuration."""
+    """Intentionally unsafe legacy settings used by rejection-path tests."""
 
     return Settings(
         environment="development",
@@ -117,20 +136,135 @@ def local_settings(valid_config_root: Path) -> Settings:
 
 
 @pytest.fixture
-def app_local_settings(local_settings: Settings) -> Settings:
-    """Local agent/auth settings with real deployment-provider construction."""
+def validated_local_settings(local_settings: Settings) -> Settings:
+    """Settings that satisfy fail-closed startup validation without live Azure."""
 
     return local_settings.model_copy(
         update={
-            "azure_subscription_id": "test-subscription",
+            "allow_mock_agents": False,
+            "allow_local_agents": False,
+            "use_synthetic_data": False,
             "azure_foundry_endpoint": "https://example.invalid/foundry",
             "azure_foundry_project_name": "test-project",
+        }
+    )
+
+
+@pytest.fixture
+def app_local_settings(validated_local_settings: Settings) -> Settings:
+    """Validation-clean app settings with fake-but-well-formed Azure fields."""
+
+    return validated_local_settings.model_copy(
+        update={
             "deployment_resource_group": "test-resource-group",
             "deployment_acr_name": "testacr",
             "deployment_container_apps_environment_id": "/test/container-apps-environment",
             "deployment_location": "eastus2",
+            "azure_subscription_id": "test-subscription",
         }
     )
+
+
+@pytest.fixture(autouse=True)
+def stub_foundry_startup_sync(monkeypatch: pytest.MonkeyPatch) -> dict[str, type[Any]]:
+    """Prevent app startup tests from requiring live Azure-only dependencies."""
+
+    from app import main as main_module
+    from app.modernization.capabilities import (
+        ModernizationCapability,
+        ModernizationCapabilityCatalog,
+    )
+    from app.phase_tracking.models import PhaseCatalog, PhaseDefinition, PhaseTaskDefinition
+    from app.services.document_understanding_service import LocalDocumentUnderstandingService
+    from app.transcription.models import TranscriptionResult
+
+    class _StubFoundryAgentSynchronizationService:
+        def __init__(self, _project_service: object) -> None:
+            self.synchronized_agent_ids: list[str] = []
+
+        def synchronize(self, agent_registry) -> None:
+            self.synchronized_agent_ids = [
+                agent.id
+                for agent in agent_registry.list()
+                if agent.enabled and agent.foundry_agent_id
+            ]
+
+    class _StubRichFoundryAgentSynchronizationService:
+        def __init__(
+            self,
+            *,
+            project_service: object,
+            prompt_registry: object,
+            inventory_service: object,
+        ) -> None:
+            self.project_service = project_service
+            self.prompt_registry = prompt_registry
+            self.inventory_service = inventory_service
+            self.synchronized_agent_ids: list[str] = []
+
+        async def synchronize(self, agent_registry) -> list[object]:
+            self.synchronized_agent_ids = [
+                agent.id
+                for agent in agent_registry.list()
+                if agent.enabled and agent.foundry_agent_id
+            ]
+            return []
+
+    class _StubSpeechToTextService:
+        async def transcribe(
+            self, *, audio_bytes: bytes, content_type: str, file_name: str
+        ) -> TranscriptionResult:
+            return TranscriptionResult(
+                text=(
+                    f"[local-speech-stub] transcribed {len(audio_bytes)} bytes from "
+                    f"'{file_name}' ({content_type}); no real speech recognition performed."
+                )
+            )
+
+    def _capability_catalog(_workflows_path) -> ModernizationCapabilityCatalog:
+        return ModernizationCapabilityCatalog(
+            version="test",
+            capabilities=[
+                ModernizationCapability(
+                    id="summarize",
+                    name="Summarize",
+                    description="Minimal modernization capability for app startup tests.",
+                    instruction_template="Summarize {target}",
+                    target_label="Target",
+                )
+            ],
+        )
+
+    def _phase_catalog(_workflows_path) -> PhaseCatalog:
+        return PhaseCatalog(
+            version="test",
+            phases=[
+                PhaseDefinition(
+                    id="discovery",
+                    name="Discovery",
+                    tasks=[PhaseTaskDefinition(id="capture", name="Capture evidence")],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        main_module,
+        "FoundryAgentSynchronizationService",
+        _StubFoundryAgentSynchronizationService,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "RichFoundryAgentSynchronizationService",
+        _StubRichFoundryAgentSynchronizationService,
+    )
+    monkeypatch.setattr(main_module, "create_document_understanding_service", lambda _settings: LocalDocumentUnderstandingService())
+    monkeypatch.setattr(main_module, "create_speech_to_text_service", lambda _settings: _StubSpeechToTextService())
+    monkeypatch.setattr(main_module, "load_modernization_capabilities", _capability_catalog)
+    monkeypatch.setattr(main_module, "load_phase_catalog", _phase_catalog)
+    return {
+        "classic": _StubFoundryAgentSynchronizationService,
+        "rich": _StubRichFoundryAgentSynchronizationService,
+    }
 
 
 @pytest.fixture

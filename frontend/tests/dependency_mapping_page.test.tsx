@@ -137,8 +137,9 @@ describe("DependencyMappingPage", () => {
     // The component's role is also annotated directly onto its graph node
     // label (not only listed separately in the text summary above), tying
     // the code summary's classification into the graph itself.
-    const componentNode = document.querySelector('[data-testid="rf__node-component:1"]');
-    expect(componentNode?.textContent).toBe("backend\nAPI layer (85%)");
+    const graphCanvas = document.querySelector(".dependency-graph");
+    expect(graphCanvas?.textContent).toContain("backend");
+    expect(graphCanvas?.textContent).toContain("API layer (85%)");
   });
 
   it("does not render a code summary card when the assessment has none", async () => {

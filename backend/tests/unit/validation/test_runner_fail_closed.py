@@ -7,9 +7,9 @@ from app.validation.base import StartupValidationError
 from app.validation.runner import StartupValidationRunner
 
 
-def test_runner_passes_for_valid_local_settings(local_settings):
+def test_runner_passes_for_valid_local_settings(validated_local_settings):
     runner = StartupValidationRunner()
-    results = runner.run_or_raise(local_settings)
+    results = runner.run_or_raise(validated_local_settings)
     assert all(result.passed for result in results)
 
 

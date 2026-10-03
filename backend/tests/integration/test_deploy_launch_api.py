@@ -38,6 +38,7 @@ from app.agents.models import AgentExecutionResult
 from app.config.settings import Settings
 from app.deploy_launch.access_policy_service import AccessPolicyService
 from app.deploy_launch.backend_deployment_service import NullBackendDeploymentService
+from app.deploy_launch.data_layer_provisioning_service import NullDataLayerProvisioningService
 from app.deploy_launch.frontend_deployment_service import NullFrontendDeploymentService
 from app.deploy_launch.mission_agent_provisioning_service import (
     NullMissionAgentProvisioningService,
@@ -95,6 +96,9 @@ _REQUIREMENTS_OUTPUT = "[REQ-001] The mission requires a search feature and an o
 def _with_deployment_config(settings: Settings) -> Settings:
     return settings.model_copy(
         update={
+            "allow_mock_agents": False,
+            "allow_local_agents": False,
+            "use_synthetic_data": False,
             "azure_subscription_id": "test-subscription",
             "azure_foundry_endpoint": "https://example.invalid/foundry",
             "azure_foundry_project_name": "test-project",
@@ -115,9 +119,9 @@ def real_config_local_settings() -> Settings:
     return Settings(
         environment="development",
         governance_provider="local",
-        allow_mock_agents=True,
-        allow_local_agents=True,
-        use_synthetic_data=True,
+        allow_mock_agents=False,
+        allow_local_agents=False,
+        use_synthetic_data=False,
         config_root=_REPO_CONFIG_ROOT,
     )
 
@@ -146,8 +150,9 @@ class _StubUpstreamWorkflowOrchestrator:
     real.
     """
 
-    def __init__(self, *, run: WorkflowRunResult) -> None:
+    def __init__(self, *, run: WorkflowRunResult, approval_service) -> None:
         self._run = run
+        self.approval_service = approval_service
 
     async def get_workflow_run(self, workflow_run_id: str) -> WorkflowRunResult | None:
         return self._run if workflow_run_id == self._run.workflow_run_id else None
@@ -243,7 +248,10 @@ async def test_full_pipeline_runs_through_the_real_http_api(
             ],
         )
         app.state.deployment_pipeline_service = DeploymentPipelineService(
-            orchestrator=_StubUpstreamWorkflowOrchestrator(run=stub_run),  # type: ignore[arg-type]
+        orchestrator=_StubUpstreamWorkflowOrchestrator(
+            run=stub_run,
+            approval_service=orchestrator.approval_service,
+        ),  # type: ignore[arg-type]
             session_service=app.state.session_service,
             event_bus=orchestrator.workflow_event_bus,
             access_policy_service=AccessPolicyService(
@@ -254,6 +262,7 @@ async def test_full_pipeline_runs_through_the_real_http_api(
             mission_agent_provisioning_service=NullMissionAgentProvisioningService(),
             backend_deployment_service=NullBackendDeploymentService(),
             frontend_deployment_service=NullFrontendDeploymentService(),
+            data_layer_provisioning_service=NullDataLayerProvisioningService(),
             test_execution_service=TestExecutionService(timeout_seconds=60),
             security_scan_service=SecurityScanService(timeout_seconds=60),
             build_workspace_root=tmp_path,
@@ -265,12 +274,24 @@ async def test_full_pipeline_runs_through_the_real_http_api(
             assert session_resp.status_code == 201
             session_id = session_resp.json()["id"]
 
-            # Deploy & Launch has exactly one gate - the human clicking
-            # Start - so this single call kicks off the real pipeline
-            # immediately, no approval round-trip needed.
+            approval_resp = await client.post(
+                f"/sessions/{session_id}/deploy-launch/request-approval",
+                json={"workflow_run_id": "run-1"},
+            )
+            assert approval_resp.status_code == 201
+            approval_request_id = approval_resp.json()["id"]
+            await orchestrator.approval_service.decide(
+                request_id=approval_request_id,
+                decision="approved",
+                decided_by="reviewer-1",
+            )
+
             start_resp = await client.post(
                 f"/sessions/{session_id}/deploy-launch/start",
-                json={"workflow_run_id": "run-1"},
+                json={
+                    "workflow_run_id": "run-1",
+                    "approval_request_id": approval_request_id,
+                },
             )
             assert start_resp.status_code == 200
             run_body = start_resp.json()

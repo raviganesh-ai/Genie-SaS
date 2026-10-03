@@ -130,7 +130,7 @@ class TestCreateAgentGateway:
         self, agent_registry: AgentRegistry, prompt_registry: PromptRegistry
     ):
         settings = Settings(allow_local_agents=False)
-        with pytest.raises(AgentGatewayError, match="Foundry"):
+        with pytest.raises(AgentGatewayError, match="azure_foundry_endpoint"):
             create_agent_gateway(
                 settings=settings, agent_registry=agent_registry, prompt_registry=prompt_registry
             )

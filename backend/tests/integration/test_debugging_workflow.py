@@ -5,15 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from app.orchestration.agent_orchestrator import create_agent_orchestrator
-
-from ._orchestration_helpers import build_orchestration_settings
+from ._orchestration_helpers import create_test_agent_orchestrator
 
 
 @pytest.fixture
 def orchestrator(tmp_path: Path):
-    settings = build_orchestration_settings(tmp_path / "config")
-    return create_agent_orchestrator(settings=settings)
+    return create_test_agent_orchestrator(tmp_path / "config")
 
 
 async def test_handle_failure_runs_configured_debugging_workflow(orchestrator) -> None:

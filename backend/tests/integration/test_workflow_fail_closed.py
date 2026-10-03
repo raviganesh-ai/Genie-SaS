@@ -10,13 +10,12 @@ from typing import Any
 
 import pytest
 
-from app.agents.gateway import UnknownAgentError, create_agent_gateway
+from app.agents.gateway import UnknownAgentError
 from app.agents.registry import AgentRegistry
 from app.governance.decision_graph_service import DecisionGraphService
 from app.governance.governance_service import GovernanceService, create_governance_service
 from app.memory.memory_service import create_memory_service
 from app.models.workflow_models import WorkflowStepInput
-from app.orchestration.agent_orchestrator import create_agent_orchestrator
 from app.orchestration.collaboration_service import CollaborationService
 from app.orchestration.handoff_service import HandoffService
 from app.orchestration.workflow_checkpoint_service import WorkflowCheckpointService
@@ -32,13 +31,16 @@ from app.orchestration.workflow_step_executor import (
 from app.prompts.registry import PromptRegistry
 from app.workflows.registry import WorkflowRegistry
 
-from ._orchestration_helpers import build_orchestration_settings
+from ._orchestration_helpers import (
+    build_orchestration_settings,
+    build_test_agent_gateway,
+    create_test_agent_orchestrator,
+)
 
 
 @pytest.fixture
 def orchestrator(tmp_path: Path):
-    settings = build_orchestration_settings(tmp_path / "config")
-    return create_agent_orchestrator(settings=settings)
+    return create_test_agent_orchestrator(tmp_path / "config")
 
 
 async def test_disabled_agent_causes_workflow_to_fail(orchestrator) -> None:
@@ -86,9 +88,7 @@ async def test_approval_required_but_no_approval_service_configured_raises(
     agent_registry = AgentRegistry.load(settings.agents_path, default_llm=settings.default_llm)
     prompt_registry = PromptRegistry.load(settings.prompts_path)
     workflow_registry = WorkflowRegistry.load(settings.workflows_path)
-    agent_gateway = create_agent_gateway(
-        settings=settings, agent_registry=agent_registry, prompt_registry=prompt_registry
-    )
+    agent_gateway = build_test_agent_gateway(settings)
     governance_service = create_governance_service(settings=settings)
     step_executor = WorkflowStepExecutor(
         agent_registry=agent_registry,
@@ -128,9 +128,7 @@ async def test_governance_write_failure_propagates(tmp_path: Path) -> None:
     settings = build_orchestration_settings(tmp_path / "config")
     agent_registry = AgentRegistry.load(settings.agents_path, default_llm=settings.default_llm)
     prompt_registry = PromptRegistry.load(settings.prompts_path)
-    agent_gateway = create_agent_gateway(
-        settings=settings, agent_registry=agent_registry, prompt_registry=prompt_registry
-    )
+    agent_gateway = build_test_agent_gateway(settings)
     memory_service = create_memory_service(settings=settings)
     base_governance_service = create_governance_service(settings=settings)
     raising_governance_service = _RaisingGovernanceService(

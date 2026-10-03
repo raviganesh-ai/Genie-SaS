@@ -6,9 +6,18 @@ exercising parallel execution, approval gating, and fail-closed scenarios.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
+from app.agents.gateway import resolve_prompt_text
+from app.agents.models import (
+    AgentExecutionRequest,
+    AgentExecutionResult,
+    AgentExecutionStreamChunk,
+)
 from app.config.settings import Settings
+from app.orchestration.agent_orchestrator import AgentOrchestrator, create_agent_orchestrator
+from app.prompts.registry import PromptRegistry
 
 _AGENTS_YAML = """
 agents:
@@ -230,6 +239,31 @@ checkpoints:
 """
 
 
+class _DeterministicTestAgentGateway:
+    """Hermetic stand-in for Azure AI Foundry used by orchestration integration tests."""
+
+    def __init__(self, *, prompt_registry: PromptRegistry) -> None:
+        self._prompt_registry = prompt_registry
+
+    async def execute(self, request: AgentExecutionRequest) -> AgentExecutionResult:
+        prompt_text = resolve_prompt_text(self._prompt_registry, request)
+        return AgentExecutionResult(
+            agent_id=request.agent_id,
+            output_text=(
+                f"[local-agent-gateway] agent='{request.agent_id}' "
+                f"resolved_prompt_length={len(prompt_text)}"
+            ),
+            correlation_id=request.correlation_id,
+        )
+
+    async def execute_stream(
+        self, request: AgentExecutionRequest
+    ) -> AsyncIterator[AgentExecutionStreamChunk]:
+        result = await self.execute(request)
+        yield AgentExecutionStreamChunk(delta=result.output_text or "")
+        yield AgentExecutionStreamChunk(result=result)
+
+
 def write_orchestration_config(config_root: Path) -> None:
     agents_dir = config_root / "agents"
     prompts_dir = config_root / "prompts"
@@ -255,4 +289,18 @@ def build_orchestration_settings(config_root: Path) -> Settings:
         allow_local_agents=True,
         use_synthetic_data=True,
         config_root=config_root,
+    )
+
+
+def build_test_agent_gateway(settings: Settings) -> _DeterministicTestAgentGateway:
+    return _DeterministicTestAgentGateway(
+        prompt_registry=PromptRegistry.load(settings.prompts_path)
+    )
+
+
+def create_test_agent_orchestrator(config_root: Path) -> AgentOrchestrator:
+    settings = build_orchestration_settings(config_root)
+    return create_agent_orchestrator(
+        settings=settings,
+        agent_gateway=build_test_agent_gateway(settings),
     )

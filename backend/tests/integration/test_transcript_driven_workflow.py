@@ -14,17 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from app.orchestration.agent_orchestrator import create_agent_orchestrator
-
-from ._orchestration_helpers import build_orchestration_settings
+from ._orchestration_helpers import create_test_agent_orchestrator
 
 _TRANSCRIPT_TEXT = "Customer call transcript: we need a self-service portal."
 
 
 @pytest.fixture
 def orchestrator(tmp_path: Path):
-    settings = build_orchestration_settings(tmp_path / "config")
-    return create_agent_orchestrator(settings=settings)
+    return create_test_agent_orchestrator(tmp_path / "config")
 
 
 async def test_transcript_text_is_auto_wired_into_a_mapped_step(orchestrator) -> None:

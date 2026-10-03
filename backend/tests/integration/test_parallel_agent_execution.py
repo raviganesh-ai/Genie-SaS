@@ -6,15 +6,12 @@ from pathlib import Path
 import pytest
 
 from app.models.workflow_models import WorkflowStepInput
-from app.orchestration.agent_orchestrator import create_agent_orchestrator
-
-from ._orchestration_helpers import build_orchestration_settings
+from ._orchestration_helpers import create_test_agent_orchestrator
 
 
 @pytest.fixture
 def orchestrator(tmp_path: Path):
-    settings = build_orchestration_settings(tmp_path / "config")
-    return create_agent_orchestrator(settings=settings)
+    return create_test_agent_orchestrator(tmp_path / "config")
 
 
 async def test_parallel_steps_execute_concurrently_and_record_collaboration(

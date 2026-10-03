@@ -2,10 +2,9 @@
 
 Extends the fail-closed startup coverage in ``test_app_startup.py`` to
 confirm ``FoundryAgentInventoryService``/``FoundryAgentLifecycleService``
-are constructed and seeded during a normal local-mode startup, without
-touching Azure AI Foundry (local settings never use
-``AzureAgentGateway``, so ``app.state.foundry_synchronization_service``
-stays ``None``).
+are constructed and seeded during startup. The real network verification
+path is stubbed in ``tests/conftest.py`` so this integration test only
+asserts wiring, not live Azure reachability.
 """
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ def test_foundry_inventory_and_lifecycle_services_are_available_after_local_star
 
         assert isinstance(app.state.foundry_inventory_service, FoundryAgentInventoryService)
         assert isinstance(app.state.foundry_lifecycle_service, FoundryAgentLifecycleService)
-        assert app.state.foundry_synchronization_service is None
+        assert app.state.foundry_synchronization_service is not None
 
 
 async def test_enabled_agents_are_seeded_into_inventory_on_startup(app_local_settings):
@@ -37,3 +36,7 @@ async def test_enabled_agents_are_seeded_into_inventory_on_startup(app_local_set
         records = await app.state.foundry_inventory_service.list()
 
     assert any(record.agent_id == "test-agent" for record in records)
+    assert set(app.state.foundry_synchronization_service.synchronized_agent_ids) == {
+        "test-agent",
+        "genie-orchestrator",
+    }
