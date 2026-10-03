@@ -557,7 +557,8 @@ class RepositoryAssessmentService:
                 infrastructure_paths.append(path)
             if ".github/workflows/" in lower_path or lower_path.endswith("azure-pipelines.yml"):
                 workflow_paths.append(path)
-            if any(part in {"test", "tests", "__tests__"} for part in pure_path.parts):
+            is_test_path = any(part in {"test", "tests", "__tests__"} for part in pure_path.parts)
+            if is_test_path:
                 test_paths.append(path)
             is_manifest = name in _MANIFEST_NAMES or suffix in {".csproj"}
             is_source = suffix in _SOURCE_SUFFIXES
@@ -730,26 +731,56 @@ class RepositoryAssessmentService:
                         )
                     else:
                         pending_local_imports.append((file_node_id, component_id, path, imported))
-                for endpoint in self._parse_endpoints(content):
-                    endpoint_id = self._node_id("integration_endpoint", endpoint)
-                    nodes.setdefault(
-                        endpoint_id,
-                        DependencyNode(
-                            id=endpoint_id,
-                            type="integration_endpoint",
-                            name=endpoint,
-                        ),
-                    )
-                    self._add_edge(
-                        edges,
-                        source=file_node_id,
-                        target=endpoint_id,
-                        edge_type="integrates_with",
-                        binding=binding,
-                        path=path,
-                        excerpt=endpoint,
-                        confidence=0.85,
-                    )
+                if not is_test_path:
+                    # Endpoints discovered only in test files (mocks, SSRF
+                    # test fixtures, etc.) are not real integrations this
+                    # repository performs in production - including them
+                    # here previously produced nonsensical noise like
+                    # "https://attacker.example/..." in the Integrations
+                    # graph view.
+                    for endpoint in self._parse_endpoints(content):
+                        # Collapse trivial trailing-slash variants of the
+                        # same URL (e.g. ".../health" vs ".../health/")
+                        # into one node instead of two near-duplicates.
+                        normalized_endpoint = endpoint.rstrip("/") or endpoint
+                        endpoint_id = self._node_id("integration_endpoint", normalized_endpoint)
+                        nodes.setdefault(
+                            endpoint_id,
+                            DependencyNode(
+                                id=endpoint_id,
+                                type="integration_endpoint",
+                                name=normalized_endpoint,
+                            ),
+                        )
+                        self._add_edge(
+                            edges,
+                            source=file_node_id,
+                            target=endpoint_id,
+                            edge_type="integrates_with",
+                            binding=binding,
+                            path=path,
+                            excerpt=endpoint,
+                            confidence=0.85,
+                        )
+                        # Also roll this up to a component-level edge
+                        # (deduplicated by _add_edge's edge-id keying) so
+                        # graph views that only show components - not
+                        # every individual source file - can still show
+                        # which component talks to which external
+                        # endpoint. Without this, the file-level edge
+                        # above is invisible in any view that hides
+                        # source_file nodes, leaving every integration
+                        # endpoint node disconnected.
+                        self._add_edge(
+                            edges,
+                            source=component_id,
+                            target=endpoint_id,
+                            edge_type="integrates_with",
+                            binding=binding,
+                            path=path,
+                            excerpt=endpoint,
+                            confidence=0.85,
+                        )
 
         self._resolve_local_dependencies(
             edges=edges,

@@ -210,6 +210,114 @@ async def test_detects_languages_and_curated_frameworks_as_technology_nodes(
     assert (backend_id, "FastAPI") in built_on_targets
 
 
+async def test_integration_endpoint_edges_roll_up_to_the_owning_component(
+    seeded_binding_repository: InMemoryRepositoryBindingRepository,
+) -> None:
+    """A graph view that only shows components (not every individual
+    source file) must still be able to show which component talks to
+    which external endpoint - this requires a component-level
+    "integrates_with" edge, not only the file-level one."""
+    service = _service_with_bindings(seeded_binding_repository)
+
+    assessment = await service.assess(
+        session_id="session-1",
+        binding_id="binding-1",
+        requesting_user_id="user-1",
+        trace_id="trace-1",
+    )
+
+    backend_id = next(n.id for n in assessment.nodes if n.name == "backend")
+    endpoint_node = next(n for n in assessment.nodes if n.type == "integration_endpoint")
+    assert endpoint_node.name == "https://api.example.test/webhook"
+    assert any(
+        edge.source == backend_id and edge.target == endpoint_node.id and edge.type == "integrates_with"
+        for edge in assessment.edges
+    )
+
+
+_ENDPOINT_FILES = {
+    "backend/api.py": "import httpx\nURL = 'https://service.example.test/api/'\n",
+    "backend/api2.py": "import httpx\nURL = 'https://service.example.test/api'\n",
+    "backend/tests/test_api.py": "URL = 'https://attacker.example.test/evil'\n",
+}
+
+
+class _EndpointGitHubMcpClient:
+    """Isolated repo layout for asserting integration-endpoint extraction
+    behavior: a trailing-slash duplicate of the same URL, and a URL that
+    only appears in a test file (which must not surface as a "real"
+    integration the repository performs in production)."""
+
+    endpoint = "https://github.example.test/mcp"
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        assert name == "get_file_contents"
+        path = arguments["path"]
+        if path == "":
+            return _mcp_result([{"path": "backend", "type": "dir"}])
+        if path == "backend":
+            return _mcp_result(
+                [
+                    {"path": "backend/api.py", "type": "file"},
+                    {"path": "backend/api2.py", "type": "file"},
+                    {"path": "backend/tests", "type": "dir"},
+                ]
+            )
+        if path == "backend/tests":
+            return _mcp_result([{"path": "backend/tests/test_api.py", "type": "file"}])
+        if path in _ENDPOINT_FILES:
+            return _mcp_file_result(_ENDPOINT_FILES[path])
+        raise AssertionError(f"Unexpected path: {path}")
+
+
+def _service_with_endpoint_fixtures(
+    binding_repository: InMemoryRepositoryBindingRepository,
+) -> RepositoryAssessmentService:
+    return RepositoryAssessmentService(
+        client=_EndpointGitHubMcpClient(),  # type: ignore[arg-type]
+        binding_repository=binding_repository,
+        assessment_repository=InMemoryRepositoryAssessmentRepository(),
+        session_service=_FakeSessionService(),  # type: ignore[arg-type]
+        governance_service=_FakeGovernanceService(),  # type: ignore[arg-type]
+        max_files=100,
+        max_depth=10,
+        max_source_bytes=1_000_000,
+        orchestrator=None,
+    )
+
+
+async def test_integration_endpoints_dedupe_trailing_slash_variants(
+    seeded_binding_repository: InMemoryRepositoryBindingRepository,
+) -> None:
+    service = _service_with_endpoint_fixtures(seeded_binding_repository)
+
+    assessment = await service.assess(
+        session_id="session-1",
+        binding_id="binding-1",
+        requesting_user_id="user-1",
+        trace_id="trace-1",
+    )
+
+    endpoint_names = {n.name for n in assessment.nodes if n.type == "integration_endpoint"}
+    assert endpoint_names == {"https://service.example.test/api"}
+
+
+async def test_integration_endpoints_found_only_in_test_files_are_excluded(
+    seeded_binding_repository: InMemoryRepositoryBindingRepository,
+) -> None:
+    service = _service_with_endpoint_fixtures(seeded_binding_repository)
+
+    assessment = await service.assess(
+        session_id="session-1",
+        binding_id="binding-1",
+        requesting_user_id="user-1",
+        trace_id="trace-1",
+    )
+
+    endpoint_names = {n.name for n in assessment.nodes if n.type == "integration_endpoint"}
+    assert "https://attacker.example.test/evil" not in endpoint_names
+
+
 _LOCAL_IMPORT_FILES = {
     "backend/main.py": (
         "import fastapi\nfrom shared.helper import do_thing\nfrom utils import local_helper\n"
