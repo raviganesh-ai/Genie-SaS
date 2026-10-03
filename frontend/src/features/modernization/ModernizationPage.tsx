@@ -237,11 +237,19 @@ export function ModernizationPage(): JSX.Element {
             ? err
             : { message: "Approved branch and pull-request execution failed." },
         );
+        // A failed execute still moves the plan server-side (e.g. to
+        // "failed" - see ModernizationService.execute_plan's except
+        // branch), but the local plans state above is never updated on
+        // the error path, so without this the card would keep showing a
+        // stale "pending_approval" badge and an enabled Execute button
+        // even though retrying would immediately fail again for the same
+        // reason. Reload so the displayed state always matches reality.
+        void load();
       } finally {
         setWorking(false);
       }
     },
-    [sessionId],
+    [sessionId, load],
   );
 
   if (!sessionId) {
