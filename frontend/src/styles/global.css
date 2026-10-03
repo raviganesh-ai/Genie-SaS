@@ -248,6 +248,23 @@ a,
   gap: 12px;
 }
 
+.modernization-chat {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+  background: #111820;
+}
+
+.modernization-cost {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+}
+
 .dependency-chat-log {
   display: grid;
   gap: 8px;

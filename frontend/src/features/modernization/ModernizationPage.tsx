@@ -17,6 +17,7 @@ import {
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { ErrorState } from "@/components/ErrorState";
 import { ModernizationArchitectureGraph } from "@/features/modernization/ModernizationArchitectureGraph";
+import { ModernizationPlanChat } from "@/features/modernization/ModernizationPlanChat";
 import { approvalApi } from "@/services/approvalApi";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
@@ -87,6 +88,12 @@ export function ModernizationPage(): JSX.Element {
   const [generatingStartedAt, setGeneratingStartedAt] = useState<string | null>(null);
   const [executingPlanId, setExecutingPlanId] = useState<string | null>(null);
   const [executingStartedAt, setExecutingStartedAt] = useState<string | null>(null);
+  // Tracks a chat-driven "Refine this plan" request (see
+  // ModernizationPlanChat and the refine() callback below) - regenerates a
+  // brand-new, independently approvable plan incorporating the user's
+  // free-text feedback rather than editing the original plan in place.
+  const [refiningPlanId, setRefiningPlanId] = useState<string | null>(null);
+  const [refiningStartedAt, setRefiningStartedAt] = useState<string | null>(null);
   // Tracks which approval request an inline Approve/Reject click is
   // currently deciding, so the user can make that governance call-to-action
   // directly on this page (see the decide() callback below) instead of
@@ -275,6 +282,39 @@ export function ModernizationPage(): JSX.Element {
       }
     },
     [sessionId, load],
+  );
+
+  const refine = useCallback(
+    async (plan: ModernizationPlan, refinementNotes: string) => {
+      if (!sessionId || !plan.capability_id) return;
+      setRefiningPlanId(plan.id);
+      setRefiningStartedAt(new Date().toISOString());
+      setError(null);
+      try {
+        // Regenerate using the plan's OWN original parameters (not
+        // whatever the form above currently holds, which may have since
+        // changed) plus the user's feedback - this always produces an
+        // additional, independently approvable plan rather than editing
+        // the one being refined.
+        const newPlan = await modernizationApi.generate(sessionId, {
+          binding_id: plan.binding_id,
+          assessment_id: plan.assessment_id,
+          standards_snapshot_id: plan.standards_snapshot_id,
+          capability_id: plan.capability_id,
+          target: plan.target,
+          architecture_reference_snapshot_id: plan.architecture_reference_snapshot_id,
+          previous_plan_id: plan.id,
+          refinement_notes: refinementNotes,
+        });
+        setPlans((current) => [newPlan, ...current]);
+      } catch (err) {
+        setError(err instanceof ApiError ? err : { message: "Refining the plan failed." });
+      } finally {
+        setRefiningPlanId(null);
+        setRefiningStartedAt(null);
+      }
+    },
+    [sessionId],
   );
 
   const decide = useCallback(
@@ -548,6 +588,21 @@ export function ModernizationPage(): JSX.Element {
                 <div><Text>{change.path}</Text><Text block size={200}>{change.reason}</Text></div>
               </div>
             ))}
+            {plan.capability_id ? (
+              <ModernizationPlanChat
+                sessionId={sessionId}
+                planId={plan.id}
+                onRefine={(notes) => void refine(plan, notes)}
+                refining={refiningPlanId === plan.id}
+              />
+            ) : null}
+            {refiningPlanId === plan.id ? (
+              <AgentActivityAnimation
+                label="Azure AI Foundry is regenerating this plan with your feedback..."
+                startedAt={refiningStartedAt}
+                fallbackDetail="This can take a little while - this is still working."
+              />
+            ) : null}
             {plan.pull_request_url ? (
               <Link href={plan.pull_request_url} target="_blank" rel="noreferrer">
                 Open draft pull request

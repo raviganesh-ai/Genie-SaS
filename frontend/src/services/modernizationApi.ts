@@ -1,5 +1,9 @@
 import { apiFetch } from "./httpClient";
-import type { ModernizationCapability, ModernizationPlan } from "@/types/modernization";
+import type {
+  ModernizationCapability,
+  ModernizationPlan,
+  ModernizationPlanChatAnswer,
+} from "@/types/modernization";
 
 export const modernizationApi = {
   list(sessionId: string): Promise<ModernizationPlan[]> {
@@ -21,12 +25,24 @@ export const modernizationApi = {
       capability_id: string;
       target: string | null;
       architecture_reference_snapshot_id?: string | null;
+      // Optional refinement: regenerate a new, independently approvable
+      // plan that incorporates free-text feedback on an earlier plan -
+      // see ModernizationPlanChat's "Refine" action.
+      previous_plan_id?: string | null;
+      refinement_notes?: string | null;
     },
   ): Promise<ModernizationPlan> {
     return apiFetch<ModernizationPlan>(`/sessions/${sessionId}/modernization`, {
       method: "POST",
       body: request,
     });
+  },
+
+  ask(sessionId: string, planId: string, message: string): Promise<ModernizationPlanChatAnswer> {
+    return apiFetch<ModernizationPlanChatAnswer>(
+      `/sessions/${sessionId}/modernization/${planId}/ask`,
+      { method: "POST", body: { message } },
+    );
   },
 
   execute(sessionId: string, planId: string): Promise<ModernizationPlan> {

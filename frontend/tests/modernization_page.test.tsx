@@ -391,4 +391,87 @@ describe("ModernizationPage", () => {
     expect(await screen.findByText("Rewrite strategy")).toBeInTheDocument();
     expect(screen.queryByText("Proposed architecture")).not.toBeInTheDocument();
   });
+
+  it("lets the user ask a grounded question about an already-generated plan", async () => {
+    const user = userEvent.setup();
+    const plan = { ...BASE_PLAN };
+
+    const fetchMock = mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/modernization/plan-1/ask`,
+        response: {
+          question: "Why was this approach chosen?",
+          answer: "Because no architectural change was required for a runtime upgrade.",
+          referenced_fields: ["rewrite_strategy"],
+          generated_at: "2026-01-02T00:00:00Z",
+        },
+      },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    const input = await screen.findByPlaceholderText(/Why was the notifications service extracted/i);
+    await user.type(input, "Why was this approach chosen?");
+    await user.click(screen.getByRole("button", { name: /^Ask Genie$/ }));
+
+    expect(
+      await screen.findByText("Because no architectural change was required for a runtime upgrade."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("rewrite_strategy")).toBeInTheDocument();
+
+    const askCall = fetchMock.mock.calls.find(([input]) =>
+      new URL(input.toString()).pathname.endsWith(
+        `/sessions/${FIXTURE_SESSION_ID}/modernization/plan-1/ask`,
+      ),
+    );
+    expect(askCall).toBeDefined();
+  });
+
+  it("lets the user refine a plan with free-text feedback, producing an additional plan", async () => {
+    const user = userEvent.setup();
+    const plan = { ...BASE_PLAN };
+    const refinedPlan = {
+      ...BASE_PLAN,
+      id: "plan-2",
+      summary: "Upgraded the runtime, keeping retries unchanged.",
+    };
+
+    const fetchMock = mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: refinedPlan },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    const input = await screen.findByPlaceholderText(/Why was the notifications service extracted/i);
+    await user.type(input, "Keep the existing retry behavior unchanged.");
+    await user.click(screen.getByRole("button", { name: /Refine this plan/i }));
+
+    expect(
+      await screen.findByText("Upgraded the runtime, keeping retries unchanged."),
+    ).toBeInTheDocument();
+
+    const generateCall = fetchMock.mock.calls.find(([input, init]) => {
+      const matchesUrl = new URL(input.toString()).pathname.endsWith(
+        `/sessions/${FIXTURE_SESSION_ID}/modernization`,
+      );
+      return matchesUrl && (init as RequestInit | undefined)?.method === "POST";
+    });
+    expect(generateCall).toBeDefined();
+    const [, generateInit] = generateCall as unknown as [string, RequestInit];
+    const body = JSON.parse(generateInit.body as string);
+    expect(body.previous_plan_id).toBe("plan-1");
+    expect(body.refinement_notes).toBe("Keep the existing retry behavior unchanged.");
+  });
 });

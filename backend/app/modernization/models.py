@@ -113,3 +113,19 @@ class ModernizationPlan(BaseModel):
             )
         return self
 
+
+class ModernizationPlanChatAnswer(BaseModel):
+    """One answer in an ad hoc conversation about an already-generated
+    modernization plan - grounded only in that plan's own JSON (summary,
+    rewrite_strategy, proposed_components, deployment_plan, changes,
+    validation_commands, residual_risks, rollback, estimated_cost), never
+    raw repository contents or the model's own general knowledge. See
+    ModernizationService.ask."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    answer: str
+    referenced_fields: list[str] = Field(default_factory=list)
+    generated_at: datetime
+

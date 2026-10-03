@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.dependencies import get_modernization_service
 from app.modernization.capabilities import ModernizationCapability
-from app.modernization.models import ModernizationPlan
+from app.modernization.models import ModernizationPlan, ModernizationPlanChatAnswer
 from app.modernization.service import ModernizationService
 from app.security.auth_models import AuthenticatedUser
 from app.security.dependencies import get_current_user
@@ -25,6 +25,18 @@ class GenerateModernizationPlanRequest(BaseModel):
     capability_id: str = Field(min_length=1)
     target: str | None = Field(default=None, max_length=200)
     architecture_reference_snapshot_id: str | None = Field(default=None, min_length=1)
+    # Optional refinement: regenerate a new, independently approvable plan
+    # (see ModernizationService.generate_plan) that incorporates free-text
+    # feedback on an earlier plan from this same session - the original
+    # plan is never mutated in place.
+    previous_plan_id: str | None = Field(default=None, min_length=1)
+    refinement_notes: str | None = Field(default=None, max_length=2000)
+
+
+class ModernizationChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1)
 
 
 @router.get("")
@@ -67,7 +79,27 @@ async def generate_modernization_plan(
         capability_id=body.capability_id,
         target=body.target,
         architecture_reference_snapshot_id=body.architecture_reference_snapshot_id,
+        previous_plan_id=body.previous_plan_id,
+        refinement_notes=body.refinement_notes,
         requesting_user_id=user.user_id,
+        trace_id=x_correlation_id or str(uuid4()),
+    )
+
+
+@router.post("/{plan_id}/ask")
+async def ask_about_modernization_plan(
+    session_id: str,
+    plan_id: str,
+    body: ModernizationChatRequest,
+    x_correlation_id: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+    service: ModernizationService = Depends(get_modernization_service),
+) -> ModernizationPlanChatAnswer:
+    return await service.ask(
+        session_id=session_id,
+        plan_id=plan_id,
+        requesting_user_id=user.user_id,
+        message=body.message,
         trace_id=x_correlation_id or str(uuid4()),
     )
 

@@ -53,3 +53,10 @@ export interface ModernizationPlan {
   created_at: string;
   updated_at: string;
 }
+
+export interface ModernizationPlanChatAnswer {
+  question: string;
+  answer: string;
+  referenced_fields: string[];
+  generated_at: string;
+}

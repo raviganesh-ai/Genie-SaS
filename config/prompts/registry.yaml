@@ -19,7 +19,11 @@ prompts:
       judgment instead. If an architecture reference is provided below, align your
       changes with it; if none was provided, determine the architecture yourself
       using Microsoft Azure Architecture Center guidance and any available IQ
-      context.
+      context. If a previous plan JSON is provided below (non-empty), this is a
+      refinement request: produce a complete, standalone replacement plan that
+      keeps everything from the previous plan the user did not ask to change, and
+      applies the refinement notes below to the rest - do not ignore the previous
+      plan's structure without reason.
 
       {retry_instruction}
 
@@ -30,6 +34,10 @@ prompts:
       Dependency assessment JSON: {assessment_json}
       Standards conformance JSON (optional, user-supplied): {standards_json}
       Architecture reference (optional, user-supplied): {architecture_reference_text}
+      Previous plan JSON (optional - present only when refining an earlier plan):
+      {previous_plan_json}
+      Refinement notes (optional, user-supplied feedback on the previous plan):
+      {refinement_notes}
 
       Return only one JSON object with this exact shape:
       {{"summary":"...","rewrite_strategy":"...","proposed_components":[{{"id":"short-id",
@@ -70,7 +78,50 @@ prompts:
       - assessment_json
       - standards_json
       - architecture_reference_text
+      - previous_plan_json
+      - refinement_notes
       - retry_instruction
+
+  - id: modernization-plan-chat-v1
+    name: Modernization Plan Conversation Q&A
+    description: >-
+      Answers one free-text question about an already-generated modernization
+      plan, strictly from that plan's own JSON - never from raw repository
+      contents or general knowledge of similarly named projects.
+    template: >-
+      You are the Build Agent deployed in Azure AI Foundry. A modernization plan
+      has already been generated and is provided below as plan_json - you never
+      see raw repository contents, only this structured plan. Answer the user's
+      question using only plan_json - never invent a file, component, cost figure,
+      or deployment step that is not literally present there, and never answer
+      from general knowledge of similarly named projects or frameworks. If the
+      plan does not cover what the question asks, say so plainly instead of
+      guessing. If the user is asking for a change rather than information (e.g.
+      "don't extract the notifications service" or "target Container Apps
+      instead"), explain what would need to change and suggest they use the
+      Refine option to regenerate the plan with that feedback - do not claim to
+      have changed the plan yourself; this endpoint never modifies it. Return
+      only valid JSON with exactly two top-level fields: answer and
+      referenced_fields. answer must be a plain-language response between 30 and
+      1,200 characters. referenced_fields must be an array drawn only from this
+      exact set of plan_json top-level field names that your answer actually
+      relies on: summary, rewrite_strategy, proposed_components, deployment_plan,
+      changes, validation_commands, residual_risks, rollback, estimated_cost -
+      never a field outside this set, and an empty array when none apply. Keep
+      the complete JSON response under 2,000 characters.
+
+      {retry_instruction}
+
+      Question:
+      {question}
+
+      Modernization plan (the only source of truth):
+      {plan_json}
+    variables:
+      - plan_json
+      - question
+      - retry_instruction
+
 
   - id: requirements-extraction-v1
     name: Requirements Extraction

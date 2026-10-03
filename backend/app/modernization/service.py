@@ -17,6 +17,7 @@ from app.modernization.capabilities import ModernizationCapability, Modernizatio
 from app.modernization.models import (
     ModernizationFileChange,
     ModernizationPlan,
+    ModernizationPlanChatAnswer,
     ModernizationProposedComponent,
 )
 from app.modernization.parsing import ModernizationAgentResponseError, parse_agent_response
@@ -53,6 +54,22 @@ _PRICING_UNAVAILABLE = CostEstimate(
     assumptions=["Azure retail pricing is not configured for this environment."],
 )
 
+# Allowlisted top-level ModernizationPlan field names the chat answer may
+# cite as `referenced_fields` (see ModernizationService.ask) - a small,
+# static set (unlike RepositoryAssessmentService.ask's dynamic per-file
+# path allowlist) since a plan's own shape never varies.
+_PLAN_CHAT_REFERENCEABLE_FIELDS = {
+    "summary",
+    "rewrite_strategy",
+    "proposed_components",
+    "deployment_plan",
+    "changes",
+    "validation_commands",
+    "residual_risks",
+    "rollback",
+    "estimated_cost",
+}
+
 
 class ModernizationError(RuntimeError):
     """Raised when a governed modernization action cannot complete."""
@@ -87,6 +104,13 @@ class _GeneratedPlan(BaseModel):
                 f"proposed_components depends_on references unknown component id(s): {unknown}"
             )
         return self
+
+
+class _PlanChatAnswerEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(min_length=1)
+    referenced_fields: list[str] = Field(default_factory=list)
 
 
 class ModernizationService:
@@ -133,6 +157,8 @@ class ModernizationService:
         trace_id: str,
         standards_snapshot_id: str | None = None,
         architecture_reference_snapshot_id: str | None = None,
+        refinement_notes: str | None = None,
+        previous_plan_id: str | None = None,
     ) -> ModernizationPlan:
         await self._session_service.get_session(
             session_id=session_id, requesting_user_id=requesting_user_id
@@ -151,6 +177,38 @@ class ModernizationService:
             raise ModernizationError("Repository assessment was not found for this session.")
         if assessment.binding_id != binding.id or assessment.commit != binding.resolved_commit:
             raise ModernizationError("Assessment does not match the active immutable binding.")
+
+        # A "refine this plan" request (see ask()'s chat-driven refinement
+        # flow) is simply generate_plan called again with the prior plan's
+        # own JSON plus the user's free-text feedback appended to the
+        # prompt - this produces a brand-new, independently approvable
+        # plan rather than mutating the original in place, mirroring
+        # Discovery's "ideate an additional solution" pattern (an
+        # additional candidate, not a silent edit of an already-reviewed
+        # one). previous_plan_json intentionally omits full file contents
+        # (paths/reasons only) to keep the prompt bounded.
+        previous_plan_json = "{}"
+        cleaned_refinement_notes = (refinement_notes or "").strip()
+        if previous_plan_id:
+            previous_plan = await self._plan_repository.get(plan_id=previous_plan_id)
+            if previous_plan is None or previous_plan.session_id != session_id:
+                raise ModernizationError("Previous modernization plan was not found for this session.")
+            previous_plan_json = json.dumps(
+                {
+                    "summary": previous_plan.summary,
+                    "rewrite_strategy": previous_plan.rewrite_strategy,
+                    "proposed_components": [
+                        component.model_dump(mode="json")
+                        for component in previous_plan.proposed_components
+                    ],
+                    "deployment_plan": previous_plan.deployment_plan,
+                    "changed_file_paths_and_reasons": [
+                        {"path": change.path, "reason": change.reason}
+                        for change in previous_plan.changes
+                    ],
+                    "residual_risks": previous_plan.residual_risks,
+                }
+            )
 
         # Optional, exactly like the architecture reference below: a user
         # may supply their own opinionated standards (a "standards"-purpose
@@ -217,6 +275,8 @@ class ModernizationService:
             "assessment_json": assessment.model_dump_json(),
             "standards_json": standards_json,
             "architecture_reference_text": architecture_reference_text,
+            "previous_plan_json": previous_plan_json,
+            "refinement_notes": cleaned_refinement_notes,
             "retry_instruction": "",
         }
         generated = await self._generate_plan_contents(
@@ -440,6 +500,92 @@ class ModernizationService:
             session_id=session_id, requesting_user_id=requesting_user_id
         )
         return self._capability_catalog.capabilities
+
+    async def ask(
+        self,
+        *,
+        session_id: str,
+        plan_id: str,
+        requesting_user_id: str,
+        message: str,
+        trace_id: str,
+    ) -> ModernizationPlanChatAnswer:
+        """Answers one free-text question about an already-generated
+        modernization plan - grounded only in that plan's own JSON, never
+        requiring the repository to be re-read or answering from general
+        knowledge. Mirrors RepositoryAssessmentService.ask's identical
+        contract and retry behavior; see that method's docstring for why
+        this fails closed (raises) rather than returning a degraded
+        answer."""
+        await self._session_service.get_session(
+            session_id=session_id, requesting_user_id=requesting_user_id
+        )
+        cleaned_message = message.strip()
+        if not cleaned_message:
+            raise ModernizationError("Describe what you'd like to know about this plan.")
+        plan = await self._owned_plan(session_id=session_id, plan_id=plan_id)
+        plan_json = plan.model_dump_json(
+            include={
+                "summary",
+                "rewrite_strategy",
+                "proposed_components",
+                "deployment_plan",
+                "changes",
+                "validation_commands",
+                "residual_risks",
+                "rollback",
+                "estimated_cost",
+                "capability_name",
+                "target",
+            }
+        )
+        variables = {
+            "plan_json": plan_json,
+            "question": cleaned_message,
+            "retry_instruction": "",
+        }
+        for attempt in range(2):
+            result = await self._orchestrator.execute_agent(
+                agent_id="build-agent",
+                prompt_id="modernization-plan-chat-v1",
+                variables=variables,
+                session_id=session_id,
+                trace_id=f"{trace_id}:modernization-chat",
+            )
+            try:
+                envelope = parse_agent_response(result.output_text, _PlanChatAnswerEnvelope)
+                break
+            except ModernizationAgentResponseError as exc:
+                if attempt == 1:
+                    raise ModernizationError(str(exc)) from exc
+                variables["retry_instruction"] = (
+                    "A prior response was malformed, truncated, or schema-invalid. "
+                    f"Correct these exact validation issues: {exc} Regenerate the "
+                    "complete response as fresh JSON."
+                )
+        else:
+            raise ModernizationError("Modernization plan chat retry loop exited unexpectedly.")
+        answer = ModernizationPlanChatAnswer(
+            question=cleaned_message,
+            answer=envelope.answer,
+            referenced_fields=[
+                field for field in envelope.referenced_fields
+                if field in _PLAN_CHAT_REFERENCEABLE_FIELDS
+            ],
+            generated_at=datetime.now(UTC),
+        )
+        await self._governance_service.record_tool_request(
+            session_id=session_id,
+            trace_id=trace_id,
+            agent_id="modernization-service",
+            tool_name="build_agent.ask",
+            detail={
+                "plan_id": plan.id,
+                "question": cleaned_message,
+                "referenced_field_count": len(answer.referenced_fields),
+            },
+        )
+        return answer
 
     async def _owned_plan(self, *, session_id: str, plan_id: str) -> ModernizationPlan:
         plan = await self._plan_repository.get(plan_id=plan_id)
