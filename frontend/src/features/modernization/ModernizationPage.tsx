@@ -234,6 +234,20 @@ export function ModernizationPage(): JSX.Element {
         architecture_reference_snapshot_id: sessionArchitectureSnapshot?.id ?? null,
       });
       setPlans((current) => [plan, ...current]);
+      // generate_plan always creates a fresh governance approval request
+      // for the new plan (see ModernizationService.generate_plan) - the
+      // page's `approvals` state was only ever populated once on initial
+      // load(), so without this refresh the newly-required decision never
+      // appeared (the plan showed "Your decision is needed" with no
+      // Approve/Reject buttons, since they only render once a matching
+      // approval is found in state).
+      try {
+        setApprovals(await approvalApi.list(sessionId));
+      } catch {
+        // Non-fatal: the plan itself still generated successfully: the
+        // next full page load will pick up the approval if this refresh
+        // fails.
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err : { message: "Foundry plan generation failed." });
     } finally {
@@ -307,6 +321,14 @@ export function ModernizationPage(): JSX.Element {
           refinement_notes: refinementNotes,
         });
         setPlans((current) => [newPlan, ...current]);
+        // Same reasoning as generate()'s refresh above - the refined plan
+        // also gets its own fresh approval request that the page's
+        // `approvals` state does not yet know about.
+        try {
+          setApprovals(await approvalApi.list(sessionId));
+        } catch {
+          // Non-fatal - see generate()'s identical comment.
+        }
       } catch (err) {
         setError(err instanceof ApiError ? err : { message: "Refining the plan failed." });
       } finally {

@@ -474,4 +474,93 @@ describe("ModernizationPage", () => {
     expect(body.previous_plan_id).toBe("plan-1");
     expect(body.refinement_notes).toBe("Keep the existing retry behavior unchanged.");
   });
+
+  it("shows the inline Approve/Reject decision immediately after generating a plan, without a full page reload", async () => {
+    const user = userEvent.setup();
+    const binding = {
+      id: "binding-1",
+      session_id: FIXTURE_SESSION_ID,
+      owner_user_id: "owner-1",
+      repository_id: 1,
+      repository_full_name: "raviganesh-ai/lumen-grove-demo",
+      repository_url: "https://github.com/raviganesh-ai/lumen-grove-demo",
+      purpose: "code",
+      requested_ref: "main",
+      resolved_commit: "a".repeat(40),
+      included_paths: [],
+      excluded_paths: [],
+      principal: "raviganesh-ai",
+      status: "approved",
+      validated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const assessment = {
+      id: "assessment-1",
+      session_id: FIXTURE_SESSION_ID,
+      binding_id: "binding-1",
+      repository_full_name: "raviganesh-ai/lumen-grove-demo",
+      commit: "a".repeat(40),
+      inventory: {
+        file_count: 9,
+        analyzed_file_count: 1,
+        languages: [],
+        manifest_paths: [],
+        infrastructure_paths: [],
+        workflow_paths: [],
+        test_paths: [],
+      },
+      nodes: [],
+      edges: [],
+      coverage_gaps: [],
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const capability = {
+      id: "monolith_modularization",
+      name: "Monolith to modular",
+      description: "Introduce internal module boundaries.",
+      target_label: null,
+      instruction_template: "Refactor the monolith.",
+    };
+    const newPlan = { ...BASE_PLAN, capability_id: "monolith_modularization" };
+    const newApproval = {
+      id: "approval-1",
+      checkpoint_id: "modernization-pr-approval",
+      session_id: FIXTURE_SESSION_ID,
+      trace_id: "trace-1",
+      requested_by_agent_id: "build-agent",
+      subject_type: "modernization_plan",
+      subject_id: "plan-1",
+      status: "pending",
+      requested_at: "2026-01-01T00:00:00Z",
+      expires_at: null,
+    };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [capability] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [binding] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [assessment] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: newPlan },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [newApproval] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    const generateButton = await screen.findByRole("button", {
+      name: /Generate Foundry modernization plan/,
+    });
+    await user.click(generateButton);
+
+    // Previously, the page's `approvals` state was only ever populated
+    // once on initial load() - the brand-new approval request this plan
+    // creates never appeared without a full page reload, so the
+    // Approve/Reject buttons silently failed to render even though a
+    // decision was in fact needed.
+    expect(
+      await screen.findByRole("button", { name: /Approve and allow execution/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Reject this plan/ })).toBeInTheDocument();
+  });
 });
