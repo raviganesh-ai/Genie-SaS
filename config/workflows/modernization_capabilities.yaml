@@ -50,7 +50,20 @@ capabilities:
       Rehost this workload to {target} with the minimum change necessary to run
       unmodified on that service - containerization, startup, health-check,
       configuration, and deployment-asset changes only. Preserve the existing
-      architecture and behavior; do not restructure modules or services.
+      architecture and behavior; do not restructure modules or services. Do not
+      upgrade the major version of the application's language runtime or
+      framework (for example Java major version, or Spring Boot/.NET/Django major
+      version) as part of this capability - that is a separate framework_upgrade
+      or runtime_upgrade capability, and bumping a framework major version here
+      risks breaking source compatibility (for example Spring Boot 3's
+      javax.*-to-jakarta.* namespace migration) without a corresponding source
+      change. If a health-check or observability dependency must be added so the
+      hosting service's probes work, pin it to a version compatible with the
+      repository's existing, unchanged framework major version. Any dependency,
+      manifest, or configuration change must keep the codebase compiling and
+      passing its existing tests exactly as before - verify every changed
+      manifest line against the actual source files' imports and APIs in the
+      dependency assessment before proposing it.
   - id: replatform
     name: Replatform (swap runtime or hosting foundation)
     description: >-
