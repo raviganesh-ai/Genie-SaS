@@ -171,164 +171,172 @@ a,
   overflow-wrap: anywhere;
 }
 
+/* These were previously (incorrectly) nested inside
+   `@media (max-width: 640px)`, which meant every one of these rules - most
+   critically `.dependency-graph`'s `height: 600px` - never applied on any
+   normal desktop-width browser window, collapsing the whole ReactFlow
+   dependency graph (and several other cards below it) to zero height and
+   making it appear completely blank. They are unconditional base styles;
+   only `.repository-search-row`'s single-column override below is
+   genuinely mobile-specific. */
+.dependency-mapping-page {
+  width: min(1200px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 16px;
+}
+
+.dependency-mapping-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dependency-mapping-stats > * {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+}
+
+.dependency-mapping-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dependency-graph-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dependency-graph {
+  height: 600px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+  background: #0f141b;
+}
+
+.code-summary-card {
+  display: grid;
+  gap: 10px;
+}
+
+.code-summary-highlights {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+
+.code-summary-roles {
+  display: grid;
+  gap: 8px;
+}
+
+.code-summary-role-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dependency-chat-card {
+  display: grid;
+  gap: 12px;
+}
+
+.dependency-chat-log {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.dependency-chat-message {
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #192230;
+}
+
+.dependency-chat-message-user {
+  justify-self: end;
+  background: #1c2b3a;
+  max-width: 85%;
+}
+
+.dependency-chat-message-genie {
+  justify-self: start;
+  background: #192230;
+  max-width: 85%;
+}
+
+.dependency-chat-references {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.dependency-chat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.dependency-chat-input {
+  min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .dependency-chat-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.standards-rule-list {
+  display: grid;
+  gap: 8px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.standards-rule {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #2a323d;
+}
+
+.iq-evidence-content {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #2a323d;
+  border-radius: 8px;
+  background: #0b0f14;
+  color: #c8d0da;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 800px) {
+  .dependency-mapping-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
   .repository-search-row {
     grid-template-columns: 1fr;
-  }
-
-  .dependency-mapping-page {
-    width: min(1200px, 100%);
-    margin: 0 auto;
-    display: grid;
-    gap: 16px;
-  }
-
-  .dependency-mapping-stats {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .dependency-mapping-stats > * {
-    display: grid;
-    gap: 4px;
-    padding: 16px;
-  }
-
-  .dependency-mapping-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .dependency-graph-controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .dependency-graph {
-    height: 600px;
-    border: 1px solid #2a323d;
-    border-radius: 8px;
-    background: #0f141b;
-  }
-
-  .code-summary-card {
-    display: grid;
-    gap: 10px;
-  }
-
-  .code-summary-highlights {
-    margin: 0;
-    padding-left: 20px;
-    display: grid;
-    gap: 4px;
-  }
-
-  .code-summary-roles {
-    display: grid;
-    gap: 8px;
-  }
-
-  .code-summary-role-row {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .dependency-chat-card {
-    display: grid;
-    gap: 12px;
-  }
-
-  .dependency-chat-log {
-    display: grid;
-    gap: 8px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    max-height: 260px;
-    overflow-y: auto;
-  }
-
-  .dependency-chat-message {
-    display: grid;
-    gap: 2px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    background: #192230;
-  }
-
-  .dependency-chat-message-user {
-    justify-self: end;
-    background: #1c2b3a;
-    max-width: 85%;
-  }
-
-  .dependency-chat-message-genie {
-    justify-self: start;
-    background: #192230;
-    max-width: 85%;
-  }
-
-  .dependency-chat-references {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-top: 4px;
-  }
-
-  .dependency-chat-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
-  }
-
-  .dependency-chat-input {
-    min-width: 0;
-  }
-
-  @media (max-width: 700px) {
-    .dependency-chat-row {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-
-  .standards-rule-list {
-    display: grid;
-    gap: 8px;
-    max-height: 520px;
-    overflow: auto;
-  }
-
-  .standards-rule {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
-    gap: 12px;
-    padding: 10px 0;
-    border-bottom: 1px solid #2a323d;
-  }
-
-  .iq-evidence-content {
-    max-height: 320px;
-    overflow: auto;
-    padding: 12px;
-    border: 1px solid #2a323d;
-    border-radius: 8px;
-    background: #0b0f14;
-    color: #c8d0da;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  @media (max-width: 800px) {
-    .dependency-mapping-stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
   }
 }
 
