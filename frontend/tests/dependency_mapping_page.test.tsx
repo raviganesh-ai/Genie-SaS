@@ -188,4 +188,51 @@ describe("DependencyMappingPage", () => {
       message: "What does the backend depend on?",
     });
   });
+
+  it("hides individual source files by default but reveals them via the toggle, for a large repository", async () => {
+    const user = userEvent.setup();
+    const sourceFileNodes = Array.from({ length: 40 }, (_, index) => ({
+      id: `source_file:${index}`,
+      type: "source_file",
+      name: `module_${index}.py`,
+      version: null,
+      path: `backend/module_${index}.py`,
+      attributes: {},
+    }));
+    const largeAssessment = {
+      ...ASSESSMENT,
+      nodes: [
+        {
+          id: "component:1",
+          type: "component",
+          name: "backend",
+          version: null,
+          path: "backend",
+          attributes: {},
+        },
+        ...sourceFileNodes,
+      ],
+    };
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [BINDING] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [largeAssessment] },
+    ]);
+
+    renderWithProviders(<DependencyMappingPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Commit pinned")).toBeInTheDocument();
+    // The structural node is always visible, but the 40 individual files
+    // default to hidden - without this, a real several-hundred-file
+    // repository would render an unboundedly tall single column that
+    // breaks ReactFlow's fitView and makes every node invisible.
+    expect(screen.getAllByText("backend").length).toBeGreaterThan(0);
+    expect(screen.queryByText("module_0.py")).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole("switch", { name: /Show individual source files \(40\)/i });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+
+    expect(await screen.findByText("module_0.py")).toBeInTheDocument();
+  });
 });

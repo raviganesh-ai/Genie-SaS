@@ -11,6 +11,7 @@ import {
   MessageBarTitle,
   Option,
   Spinner,
+  Switch,
   Text,
   Title2,
 } from "@fluentui/react-components";
@@ -86,6 +87,13 @@ export function DependencyMappingPage(): JSX.Element {
   const [chatDraft, setChatDraft] = useState("");
   const [chatAsking, setChatAsking] = useState(false);
   const [chatError, setChatError] = useState<SafeError | null>(null);
+  // Individual source files/manifests are the vast majority of nodes in any
+  // real repository (hundreds, vs. a handful of components/technologies/
+  // packages) - defaulting them OFF keeps the graph legible out of the box;
+  // the component/technology/package/endpoint "structural" view already
+  // answers "how is this codebase organized and what does it depend on"
+  // without forcing a render of every single file.
+  const [showSourceFiles, setShowSourceFiles] = useState(false);
 
   const runAssessmentFor = useCallback(
     async (bindingId: string) => {
@@ -179,14 +187,27 @@ export function DependencyMappingPage(): JSX.Element {
 
   const graph = useMemo(() => {
     if (!assessment) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const rows: Record<number, number> = {};
-    const nodes: Node[] = assessment.nodes.map((node) => {
-      const column = NODE_COLUMNS[node.type];
-      const row = rows[column] ?? 0;
-      rows[column] = row + 1;
+    const visibleAssessmentNodes = showSourceFiles
+      ? assessment.nodes
+      : assessment.nodes.filter((node) => node.type !== "source_file");
+    // A square-ish grid (not one unboundedly tall column per type) keeps
+    // the overall bounding box's aspect ratio sane no matter how many
+    // nodes there are - a real several-hundred-file repository's single-
+    // column layout could be tens of thousands of pixels tall, which made
+    // ReactFlow's fitView zoom out so far the nodes became invisible.
+    // Nodes are still sorted by type first, so same-type nodes visually
+    // cluster together within the grid.
+    const sorted = [...visibleAssessmentNodes].sort(
+      (a, b) => NODE_COLUMNS[a.type] - NODE_COLUMNS[b.type],
+    );
+    const columnsPerRow = Math.max(4, Math.ceil(Math.sqrt(sorted.length)));
+    const visibleNodeIds = new Set(sorted.map((node) => node.id));
+    const nodes: Node[] = sorted.map((node, index) => {
+      const col = index % columnsPerRow;
+      const row = Math.floor(index / columnsPerRow);
       return {
         id: node.id,
-        position: { x: column * 340, y: row * 90 },
+        position: { x: col * 280, y: row * 100 },
         data: { label: node.version ? `${node.name} ${node.version}` : node.name },
         style: {
           color: "#fff",
@@ -198,17 +219,19 @@ export function DependencyMappingPage(): JSX.Element {
         },
       };
     });
-    const edges: Edge[] = assessment.edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      label: `${edge.type} (${Math.round(edge.confidence * 100)}%)`,
-      animated: edge.type === "integrates_with" || edge.type === "depends_on",
-      style: { stroke: EDGE_STROKE_COLORS[edge.type] ?? "#6f7b8a" },
-      labelStyle: { fill: "#c8d0da", fontSize: 10 },
-    }));
+    const edges: Edge[] = assessment.edges
+      .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
+      .map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: `${edge.type} (${Math.round(edge.confidence * 100)}%)`,
+        animated: edge.type === "integrates_with" || edge.type === "depends_on",
+        style: { stroke: EDGE_STROKE_COLORS[edge.type] ?? "#6f7b8a" },
+        labelStyle: { fill: "#c8d0da", fontSize: 10 },
+      }));
     return { nodes, edges };
-  }, [assessment]);
+  }, [assessment, showSourceFiles]);
 
   if (!sessionId) {
     return <ErrorState error={{ message: "Create a session before running dependency mapping." }} />;
@@ -301,7 +324,14 @@ export function DependencyMappingPage(): JSX.Element {
                 <Text weight="semibold">{assessment.repository_full_name}</Text>
                 <Text block size={200} className="repository-commit">{assessment.commit}</Text>
               </div>
-              <Badge color="success">Commit pinned</Badge>
+              <div className="dependency-graph-controls">
+                <Switch
+                  label={`Show individual source files (${assessment.nodes.filter((node) => node.type === "source_file").length})`}
+                  checked={showSourceFiles}
+                  onChange={(_, data) => setShowSourceFiles(data.checked)}
+                />
+                <Badge color="success">Commit pinned</Badge>
+              </div>
             </div>
             <div className="dependency-graph">
               <ReactFlow nodes={graph.nodes} edges={graph.edges} fitView>

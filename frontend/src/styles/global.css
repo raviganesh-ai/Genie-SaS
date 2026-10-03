@@ -202,6 +202,12 @@ a,
     gap: 16px;
   }
 
+  .dependency-graph-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
   .dependency-graph {
     height: 600px;
     border: 1px solid #2a323d;

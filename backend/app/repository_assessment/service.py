@@ -573,33 +573,43 @@ class RepositoryAssessmentService:
                     )
                 )
                 continue
-            try:
-                raw = await self._get_contents_resilient(
-                    client=client,
-                    owner=owner,
-                    repository=repository,
-                    path=path,
-                    commit=binding.resolved_commit,
-                )
-            except RepositoryAssessmentError as exc:
-                gaps.append(
-                    CoverageGap(
-                        category="unreadable_content",
-                        detail=f"GitHub MCP could not read this file after retrying: {exc}",
-                        paths=[path],
+            if size == 0:
+                # A directory-listing size of exactly 0 bytes is GitHub's own,
+                # authoritative statement that the file is intentionally
+                # empty (e.g. a marker `__init__.py`) - there is nothing to
+                # read, so there is nothing "unreadable" about it. Skip the
+                # content fetch entirely (one fewer GitHub MCP call) and
+                # record it as analyzed with empty content rather than as a
+                # coverage gap.
+                content: str | None = ""
+            else:
+                try:
+                    raw = await self._get_contents_resilient(
+                        client=client,
+                        owner=owner,
+                        repository=repository,
+                        path=path,
+                        commit=binding.resolved_commit,
                     )
-                )
-                continue
-            content = self._file_text(raw)
-            if content is None:
-                gaps.append(
-                    CoverageGap(
-                        category="unreadable_content",
-                        detail="GitHub MCP did not return readable text content.",
-                        paths=[path],
+                except RepositoryAssessmentError as exc:
+                    gaps.append(
+                        CoverageGap(
+                            category="unreadable_content",
+                            detail=f"GitHub MCP could not read this file after retrying: {exc}",
+                            paths=[path],
+                        )
                     )
-                )
-                continue
+                    continue
+                content = self._file_text(raw)
+                if content is None:
+                    gaps.append(
+                        CoverageGap(
+                            category="unreadable_content",
+                            detail="GitHub MCP did not return readable text content.",
+                            paths=[path],
+                        )
+                    )
+                    continue
             analyzed_count += 1
             file_node_id = self._node_id("manifest" if is_manifest else "source_file", path)
             nodes[file_node_id] = DependencyNode(

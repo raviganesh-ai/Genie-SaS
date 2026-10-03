@@ -698,6 +698,63 @@ async def test_assess_recovers_from_a_transient_single_file_read_failure(
     assert client.attempts_for_flaky_path == 2
 
 
+class _EmptyInitFileGitHubMcpClient:
+    """Mirrors `_FakeGitHubMcpClient`'s layout, but `backend` additionally
+    contains a legitimately empty `__init__.py` (a 0-byte marker file, as
+    reported by GitHub's own directory listing `size` field) - if
+    `get_file_contents` is ever called for it, that is itself the bug this
+    test guards against, so it raises instead of returning a fake result."""
+
+    endpoint = "https://github.example.test/mcp"
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        assert name == "get_file_contents"
+        path = arguments["path"]
+        if path == "":
+            return _mcp_result(
+                [
+                    {"path": "README.md", "type": "file"},
+                    {"path": "frontend", "type": "dir"},
+                    {"path": "backend", "type": "dir"},
+                ]
+            )
+        if path == "frontend":
+            return _mcp_result(
+                [
+                    {"path": "frontend/app.tsx", "type": "file"},
+                    {"path": "frontend/package.json", "type": "file"},
+                ]
+            )
+        if path == "backend":
+            return _mcp_result(
+                [
+                    {"path": "backend/main.py", "type": "file"},
+                    {"path": "backend/requirements.txt", "type": "file"},
+                    {"path": "backend/__init__.py", "type": "file", "size": 0},
+                ]
+            )
+        if path in _FILES:
+            return _mcp_file_result(_FILES[path])
+        raise AssertionError(f"get_file_contents must not be called for a known-empty file: {path}")
+
+
+async def test_assess_treats_a_known_empty_file_as_analyzed_not_a_coverage_gap(
+    seeded_binding_repository: InMemoryRepositoryBindingRepository,
+) -> None:
+    client = _EmptyInitFileGitHubMcpClient()
+    service = _service_with_flaky_client(seeded_binding_repository, client=client)
+
+    assessment = await service.assess(
+        session_id="session-1",
+        binding_id="binding-1",
+        requesting_user_id="user-1",
+        trace_id="trace-1",
+    )
+
+    assert assessment.coverage_gaps == []
+    assert any(node.name == "__init__.py" for node in assessment.nodes)
+
+
 async def test_assess_records_a_gap_and_continues_when_one_file_persistently_fails(
     seeded_binding_repository: InMemoryRepositoryBindingRepository,
 ) -> None:
