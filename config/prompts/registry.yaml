@@ -21,6 +21,8 @@ prompts:
       using Microsoft Azure Architecture Center guidance and any available IQ
       context.
 
+      {retry_instruction}
+
       Repository: {repository_full_name}
       Base commit: {base_commit}
       Selected capability: {capability_name}
@@ -42,6 +44,7 @@ prompts:
       - assessment_json
       - standards_json
       - architecture_reference_text
+      - retry_instruction
 
   - id: requirements-extraction-v1
     name: Requirements Extraction

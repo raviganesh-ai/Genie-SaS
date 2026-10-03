@@ -16,6 +16,7 @@ import {
 } from "@fluentui/react-components";
 import { AgentActivityAnimation } from "@/components/AgentActivityAnimation";
 import { ErrorState } from "@/components/ErrorState";
+import { approvalApi } from "@/services/approvalApi";
 import { ApiError } from "@/services/httpClient";
 import { modernizationApi } from "@/services/modernizationApi";
 import { platformConfigApi } from "@/services/platformConfigApi";
@@ -23,6 +24,7 @@ import { repositoryConnectionApi } from "@/services/repositoryConnectionApi";
 import { standardsApi } from "@/services/standardsApi";
 import { useSessionContext } from "@/state/SessionContext";
 import type { SafeError } from "@/types/common";
+import type { ApprovalRequest } from "@/types/governance";
 import type { ModernizationCapability, ModernizationPlan } from "@/types/modernization";
 import type { RepositoryAssessment, RepositoryPurposeBinding } from "@/types/repositoryConnection";
 import type { ArchitectureReferenceSnapshot, StandardsSnapshot } from "@/types/standards";
@@ -50,6 +52,15 @@ export function ModernizationPage(): JSX.Element {
   const [assessments, setAssessments] = useState<RepositoryAssessment[]>([]);
   const [plans, setPlans] = useState<ModernizationPlan[]>([]);
   const [capabilities, setCapabilities] = useState<ModernizationCapability[]>([]);
+  // A plan's own `status` stays "pending_approval" for its entire
+  // lifetime up to execution - the actual approve/reject decision lives
+  // on a separate ApprovalRequest record (see Governance/"Track all
+  // phases and evidence"). Fetching these lets the page show each plan's
+  // *real* approval state and gate "Execute" on it actually being
+  // approved, instead of enabling the button the moment a plan merely
+  // requests approval (previously fired at the backend and failed with a
+  // 400 - a real, confusing bug found via live testing).
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   // Whether an administrator has configured a platform-level
   // architecture/standards reference (see /configure) - shown read-only so
   // the customer can see Genie is actually using what they configured,
@@ -78,6 +89,7 @@ export function ModernizationPage(): JSX.Element {
         allCapabilities,
         architectureRepos,
         standardsRepos,
+        allApprovals,
       ] = await Promise.all([
         repositoryConnectionApi.listBindings(sessionId),
         repositoryConnectionApi.listAssessments(sessionId),
@@ -85,7 +97,9 @@ export function ModernizationPage(): JSX.Element {
         modernizationApi.capabilities(sessionId),
         platformConfigApi.list("architecture"),
         platformConfigApi.list("standards"),
+        approvalApi.list(sessionId),
       ]);
+      setApprovals(allApprovals);
       const codeBindings = allBindings.filter(
         (binding) => binding.purpose === "code" && binding.status === "approved",
       );
@@ -379,39 +393,57 @@ export function ModernizationPage(): JSX.Element {
           Generate Foundry modernization plan
         </Button>
       </Card>
-      {plans.map((plan) => (
-        <Card className="repository-intake-card" key={plan.id}>
-          <div className="dependency-mapping-heading">
-            <Text weight="semibold">{plan.summary}</Text>
-            <Badge>{plan.status}</Badge>
-          </div>
-          <Text size={200} className="repository-commit">{plan.base_commit}</Text>
-          <Text block>
-            {plan.capability_name ?? "Legacy modernization plan"}
-            {plan.target ? `: ${plan.target}` : ""}
-          </Text>
-          <Text>{plan.changes.length} complete file change(s) on {plan.branch_name}</Text>
-          {plan.changes.map((change) => (
-            <div className="standards-rule" key={change.path}>
-              <Badge>file</Badge>
-              <div><Text>{change.path}</Text><Text block size={200}>{change.reason}</Text></div>
+      {plans.map((plan) => {
+        // A plan's own `status` field stays "pending_approval" for its
+        // entire lifetime up to execution (see
+        // ModernizationService.execute_plan) - the real approve/reject
+        // decision lives on this separate ApprovalRequest, which Execute
+        // is actually gated on server-side.
+        const approval = approvals.find((item) => item.id === plan.approval_request_id);
+        const isApproved = approval?.status === "approved";
+        return (
+          <Card className="repository-intake-card" key={plan.id}>
+            <div className="dependency-mapping-heading">
+              <Text weight="semibold">{plan.summary}</Text>
+              <Badge>{plan.status}</Badge>
             </div>
-          ))}
-          {plan.pull_request_url ? (
-            <Link href={plan.pull_request_url} target="_blank" rel="noreferrer">
-              Open draft pull request
-            </Link>
-          ) : (
-            <Button
-              appearance="primary"
-              disabled={working || plan.status !== "pending_approval"}
-              onClick={() => void execute(plan.id)}
-            >
-              Execute after Governance approval
-            </Button>
-          )}
-        </Card>
-      ))}
+            <Text size={200} className="repository-commit">{plan.base_commit}</Text>
+            <Text block>
+              {plan.capability_name ?? "Legacy modernization plan"}
+              {plan.target ? `: ${plan.target}` : ""}
+            </Text>
+            <Text>{plan.changes.length} complete file change(s) on {plan.branch_name}</Text>
+            {plan.changes.map((change) => (
+              <div className="standards-rule" key={change.path}>
+                <Badge>file</Badge>
+                <div><Text>{change.path}</Text><Text block size={200}>{change.reason}</Text></div>
+              </div>
+            ))}
+            {plan.pull_request_url ? (
+              <Link href={plan.pull_request_url} target="_blank" rel="noreferrer">
+                Open draft pull request
+              </Link>
+            ) : plan.status === "pending_approval" && !isApproved ? (
+              <MessageBar intent={approval?.status === "rejected" ? "error" : "warning"}>
+                <MessageBarBody>
+                  {approval?.status === "rejected"
+                    ? "This plan's governance approval request was rejected - it cannot be executed."
+                    : "Awaiting Governance approval before this plan can be executed."}{" "}
+                  <Link onClick={() => navigate("/phases")}>Review in Governance</Link>
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <Button
+                appearance="primary"
+                disabled={working || plan.status !== "pending_approval"}
+                onClick={() => void execute(plan.id)}
+              >
+                Execute after Governance approval
+              </Button>
+            )}
+          </Card>
+        );
+      })}
       {error ? <ErrorState error={error} onRetry={() => void load()} /> : null}
     </section>
   );

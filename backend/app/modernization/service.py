@@ -7,12 +7,13 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.governance.approval_service import ApprovalService
 from app.governance.governance_service import GovernanceService
 from app.modernization.capabilities import ModernizationCapability, ModernizationCapabilityCatalog
 from app.modernization.models import ModernizationFileChange, ModernizationPlan
+from app.modernization.parsing import ModernizationAgentResponseError, parse_agent_response
 from app.modernization.repository import ModernizationPlanRepository
 from app.orchestration.agent_orchestrator import AgentOrchestrator
 from app.platform_config.repository import PlatformReferenceRepositoryStore
@@ -168,27 +169,19 @@ class ModernizationService:
 
         capability = self._capability_catalog.get(capability_id)
         instruction = capability.instruction(target)
-        result = await self._orchestrator.execute_agent(
-            agent_id="build-agent",
-            prompt_id="modernization-plan-v1",
-            variables={
-                "repository_full_name": binding.repository_full_name,
-                "base_commit": binding.resolved_commit,
-                "capability_name": capability.name,
-                "modernization_instruction": instruction,
-                "assessment_json": assessment.model_dump_json(),
-                "standards_json": standards_json,
-                "architecture_reference_text": architecture_reference_text,
-            },
-            session_id=session_id,
-            trace_id=trace_id,
+        variables = {
+            "repository_full_name": binding.repository_full_name,
+            "base_commit": binding.resolved_commit,
+            "capability_name": capability.name,
+            "modernization_instruction": instruction,
+            "assessment_json": assessment.model_dump_json(),
+            "standards_json": standards_json,
+            "architecture_reference_text": architecture_reference_text,
+            "retry_instruction": "",
+        }
+        generated = await self._generate_plan_contents(
+            variables=variables, session_id=session_id, trace_id=trace_id
         )
-        try:
-            generated = _GeneratedPlan.model_validate(json.loads(result.output_text))
-        except (json.JSONDecodeError, ValidationError) as exc:
-            raise ModernizationError(
-                "The Foundry Build Agent returned an invalid modernization plan contract."
-            ) from exc
 
         now = datetime.now(UTC)
         plan_id = str(uuid4())
@@ -233,6 +226,43 @@ class ModernizationService:
         )
         await self._plan_repository.put(plan)
         return plan
+
+    async def _generate_plan_contents(
+        self,
+        *,
+        variables: dict[str, str],
+        session_id: str,
+        trace_id: str,
+    ) -> _GeneratedPlan:
+        """Calls the Build Agent and strictly parses its JSON contract,
+        retrying once with an explicit correction instruction if the first
+        response is malformed, truncated, or schema-invalid - the same
+        resilience pattern already used for the code-analyst and other
+        Foundry agents in this codebase, since an occasional malformed LLM
+        response (e.g. wrapped in Markdown fences despite being told not
+        to) should not fail the entire plan generation outright."""
+        for attempt in range(2):
+            result = await self._orchestrator.execute_agent(
+                agent_id="build-agent",
+                prompt_id="modernization-plan-v1",
+                variables=variables,
+                session_id=session_id,
+                trace_id=trace_id,
+            )
+            try:
+                return parse_agent_response(result.output_text, _GeneratedPlan)
+            except ModernizationAgentResponseError as exc:
+                if attempt == 1:
+                    raise ModernizationError(
+                        f"The Foundry Build Agent returned an invalid modernization plan "
+                        f"contract: {exc}"
+                    ) from exc
+                variables["retry_instruction"] = (
+                    "A prior response was malformed, truncated, or schema-invalid. "
+                    f"Correct these exact validation issues: {exc} Regenerate the complete "
+                    "response as fresh JSON with no Markdown fences."
+                )
+        raise ModernizationError("Modernization plan generation retry loop exited unexpectedly.")
 
     async def execute_plan(
         self,
