@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Badge,
@@ -186,7 +186,16 @@ export function ModernizationPage(): JSX.Element {
   const navigate = useNavigate();
   const { sessionId } = useSessionContext();
   const [bindings, setBindings] = useState<RepositoryPurposeBinding[]>([]);
-  const [assessments, setAssessments] = useState<RepositoryAssessment[]>([]);
+  // The *entire* session's assessments, across every repository the
+  // session's "code" purpose has ever been bound to (rebinding supersedes
+  // the previous binding - see Repository Analysis - but its old
+  // assessment rows are never deleted). Never render this list directly;
+  // always go through assessmentsForBinding below, which scopes it to
+  // the currently selected repository. Real bug found via live UI
+  // testing: this dropdown used to show (and could silently submit) an
+  // assessment left over from a *different, already-superseded*
+  // repository binding once a session had been rebound to a second repo.
+  const [allAssessments, setAllAssessments] = useState<RepositoryAssessment[]>([]);
   const [plans, setPlans] = useState<ModernizationPlan[]>([]);
   const [capabilities, setCapabilities] = useState<ModernizationCapability[]>([]);
   // A plan's own `status` stays "pending_approval" for its entire
@@ -259,7 +268,7 @@ export function ModernizationPage(): JSX.Element {
     try {
       const [
         allBindings,
-        allAssessments,
+        fetchedAssessments,
         allPlans,
         allCapabilities,
         architectureRepos,
@@ -281,41 +290,73 @@ export function ModernizationPage(): JSX.Element {
       setBindings(codeBindings);
       setPlans(allPlans);
       setCapabilities(allCapabilities);
+      setAllAssessments(fetchedAssessments);
       setPlatformArchitectureCount(architectureRepos.length);
       setPlatformStandardsCount(standardsRepos.length);
-      setBindingId((current) => current || codeBindings[0]?.id || "");
+      // Rebinding "code" purpose to a different repository (Repository
+      // Analysis) supersedes the previous binding, so it drops out of
+      // codeBindings above - if the binding this page currently has
+      // selected is no longer in that list, fall back to the current
+      // active one instead of silently keeping a stale, superseded id.
+      setBindingId((current) =>
+        current && codeBindings.some((binding) => binding.id === current)
+          ? current
+          : codeBindings[0]?.id ?? "",
+      );
       setCapabilityId((current) => current || allCapabilities[0]?.id || "");
-      // A "Modernize and deliver" mission can reach this page straight
-      // from Repository Analysis, before anyone has run a dependency
-      // assessment on the bound repository. Rather than blocking plan
-      // generation on a manual detour through Dependency Mapping for an
-      // ask the user already made, run it here automatically the first
-      // time it's missing.
-      const firstBindingId = codeBindings[0]?.id ?? "";
-      if (allAssessments.length === 0 && firstBindingId) {
-        setAssessments([]);
-        setAssessing(true);
-        setAssessingStartedAt(new Date().toISOString());
-        try {
-          const created = await repositoryConnectionApi.createAssessment(sessionId, firstBindingId);
-          setAssessments([created]);
-          setAssessmentId((current) => current || created.id);
-        } catch (err) {
-          setError(
-            err instanceof ApiError ? err : { message: "The live repository assessment failed." },
-          );
-        } finally {
-          setAssessing(false);
-          setAssessingStartedAt(null);
-        }
-        return;
-      }
-      setAssessments(allAssessments);
-      setAssessmentId((current) => current || allAssessments[0]?.id || "");
     } catch (err) {
       setError(err instanceof ApiError ? err : { message: "Unable to load modernization data." });
     }
   }, [sessionId]);
+
+  // Keeps the Dependency assessment selection scoped to whichever
+  // repository is currently selected above, instead of a session-wide
+  // list - real bug found via live UI testing: after rebinding "code" to
+  // a second repository, this dropdown kept showing (and could silently
+  // submit) the *first* repository's assessment, since both repositories'
+  // assessment rows live in the same session-wide list and nothing
+  // filtered by the active binding. Auto-runs a fresh assessment the
+  // first time a given binding has none yet, same as before.
+  const assessmentsForBinding = useMemo(
+    () => allAssessments.filter((assessment) => assessment.binding_id === bindingId),
+    [allAssessments, bindingId],
+  );
+  useEffect(() => {
+    if (!sessionId || !bindingId) return;
+    if (assessmentsForBinding.length > 0) {
+      setAssessmentId((current) =>
+        assessmentsForBinding.some((assessment) => assessment.id === current)
+          ? current
+          : assessmentsForBinding[assessmentsForBinding.length - 1].id,
+      );
+      return;
+    }
+    setAssessmentId("");
+    let cancelled = false;
+    setAssessing(true);
+    setAssessingStartedAt(new Date().toISOString());
+    repositoryConnectionApi
+      .createAssessment(sessionId, bindingId)
+      .then((created) => {
+        if (cancelled) return;
+        setAllAssessments((current) => [...current, created]);
+        setAssessmentId(created.id);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(
+          err instanceof ApiError ? err : { message: "The live repository assessment failed." },
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setAssessing(false);
+        setAssessingStartedAt(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, bindingId, assessmentsForBinding]);
 
   const [sessionArchitectureSnapshot, setSessionArchitectureSnapshot] =
     useState<ArchitectureReferenceSnapshot | null>(null);
@@ -543,13 +584,14 @@ export function ModernizationPage(): JSX.Element {
             value={
               assessing
                 ? "Reading immutable repository..."
-                : assessments.find((item) => item.id === assessmentId)?.repository_full_name ?? ""
+                : assessmentsForBinding.find((item) => item.id === assessmentId)
+                    ?.repository_full_name ?? ""
             }
             selectedOptions={assessmentId ? [assessmentId] : []}
             onOptionSelect={(_, data) => setAssessmentId(data.optionValue ?? "")}
             disabled={assessing}
           >
-            {assessments.map((item) => (
+            {assessmentsForBinding.map((item) => (
               <Option key={item.id} value={item.id}>{item.repository_full_name}</Option>
             ))}
           </Dropdown>

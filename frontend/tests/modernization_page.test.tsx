@@ -153,6 +153,105 @@ describe("ModernizationPage", () => {
     expect(createCall).toBeDefined();
   });
 
+  it("scopes the dependency assessment to the currently bound repository after a rebind, instead of an old superseded repository's assessment", async () => {
+    // Regression test for a real bug found via live UI testing: after a
+    // session's "code" purpose binding was rebound from one repository to
+    // another, the first repository's binding became "superseded" (and
+    // correctly dropped out of the "Code repository" dropdown) but its
+    // dependency assessment stayed selected/visible in the "Dependency
+    // assessment" dropdown, since that list was never filtered to match
+    // the active binding - risking a plan silently generated against the
+    // wrong repository's evidence.
+    const supersededBinding = {
+      id: "binding-1",
+      session_id: FIXTURE_SESSION_ID,
+      owner_user_id: "owner-1",
+      repository_id: 1,
+      repository_full_name: "raviganesh-ai/demo-fake-py3.9",
+      repository_url: "https://github.com/raviganesh-ai/demo-fake-py3.9",
+      purpose: "code",
+      requested_ref: "main",
+      resolved_commit: "a".repeat(40),
+      included_paths: [],
+      excluded_paths: [],
+      principal: "raviganesh-ai",
+      status: "superseded",
+      validated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const activeBinding = {
+      ...supersededBinding,
+      id: "binding-2",
+      repository_id: 2,
+      repository_full_name: "raviganesh-ai/sample-fake-java",
+      repository_url: "https://github.com/raviganesh-ai/sample-fake-java",
+      status: "approved",
+      created_at: "2026-01-02T00:00:00Z",
+    };
+    const staleAssessment = {
+      id: "assessment-1",
+      session_id: FIXTURE_SESSION_ID,
+      binding_id: "binding-1",
+      repository_full_name: "raviganesh-ai/demo-fake-py3.9",
+      commit: "a".repeat(40),
+      inventory: {
+        file_count: 3,
+        analyzed_file_count: 3,
+        languages: [],
+        manifest_paths: [],
+        infrastructure_paths: [],
+        workflow_paths: [],
+        test_paths: [],
+      },
+      nodes: [],
+      edges: [],
+      coverage_gaps: [],
+      created_at: "2026-01-01T00:05:00Z",
+    };
+    const freshAssessment = {
+      ...staleAssessment,
+      id: "assessment-2",
+      binding_id: "binding-2",
+      repository_full_name: "raviganesh-ai/sample-fake-java",
+      created_at: "2026-01-02T00:05:00Z",
+    };
+
+    const fetchMock = mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`,
+        response: [supersededBinding, activeBinding],
+      },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments/binding-2`,
+        response: freshAssessment,
+      },
+      {
+        match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`,
+        response: [staleAssessment],
+      },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    // The only selectable "Code repository" is the active (non-superseded)
+    // binding.
+    expect(await screen.findAllByText("raviganesh-ai/sample-fake-java")).not.toHaveLength(0);
+    expect(screen.queryByText("raviganesh-ai/demo-fake-py3.9")).not.toBeInTheDocument();
+
+    // A fresh assessment must have been triggered for the *active* binding,
+    // never reusing the superseded repository's stale assessment.
+    const createCall = fetchMock.mock.calls.find(([input]) =>
+      new URL(input.toString()).pathname.endsWith(
+        `/sessions/${FIXTURE_SESSION_ID}/repository-assessments/binding-2`,
+      ),
+    );
+    expect(createCall).toBeDefined();
+  });
+
   it("only enables Execute once the plan's governance approval request is actually approved", async () => {
     const plan = { ...BASE_PLAN };
     const pendingApproval = {
