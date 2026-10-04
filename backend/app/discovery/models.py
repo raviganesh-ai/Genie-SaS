@@ -125,6 +125,13 @@ class CostEstimate(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     source_urls: list[str] = Field(default_factory=list)
     retrieved_at: datetime | None = None
+    # True only for ModernizationService's illustrative-baseline path (see
+    # that module) - a best-effort "what a typical deployment of this
+    # workload costs" estimate shown when a capability introduces no new
+    # Azure cost to quote, never a claim about the customer's actual
+    # current spend. Discovery's cost estimates never set this (always
+    # real priced solution costs), so it defaults False for them.
+    is_illustrative: bool = False
 
 
 class PricingQuery(BaseModel):

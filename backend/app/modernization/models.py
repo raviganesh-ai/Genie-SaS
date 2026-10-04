@@ -88,6 +88,13 @@ class ModernizationPlan(BaseModel):
     # Prices API (see ModernizationService._pricing_service), never
     # hallucinated, mirroring Discovery's identical pricing_queries pattern.
     pricing_queries: list[PricingQuery] = Field(default_factory=list)
+    # Populated by the Build Agent only when pricing_queries is empty
+    # (this capability doesn't change hosting costs) - a best-effort,
+    # clearly-labeled illustrative baseline for what a typical minimal
+    # deployment of this workload's existing stack already costs, grounded
+    # in the dependency assessment. Never used when pricing_queries is
+    # non-empty (see ModernizationService.generate_plan).
+    illustrative_pricing_queries: list[PricingQuery] = Field(default_factory=list)
     estimated_cost: CostEstimate | None = None
     branch_name: str
     status: ModernizationStatus = "draft"

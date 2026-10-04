@@ -94,6 +94,12 @@ export interface CostEstimate {
   assumptions: string[];
   source_urls: string[];
   retrieved_at: string | null;
+  /** True only for a modernization plan's illustrative-baseline estimate
+   * (see ModernizationService._estimate_plan_cost) - a best-effort "what a
+   * typical deployment costs" figure, never a real quote or a claim about
+   * the customer's actual current spend. Always false for Discovery's
+   * cost estimates. */
+  is_illustrative?: boolean;
 }
 
 export interface ProposedSolution {

@@ -55,6 +55,9 @@ prompts:
       "validation_commands":["real command"],"residual_risks":["..."],"rollback":"...",
       "pricing_queries":[{{"service_name":"...","retail_service_name":"...",
       "product_name":"...","arm_region_name":"...","sku_name":"...","meter_name":"...",
+      "unit_of_measure":"...","units_per_month":1,"assumption":"..."}}],
+      "illustrative_pricing_queries":[{{"service_name":"...","retail_service_name":"...",
+      "product_name":"...","arm_region_name":"...","sku_name":"...","meter_name":"...",
       "unit_of_measure":"...","units_per_month":1,"assumption":"..."}}]}}.
       rewrite_strategy must explain, in prose, why this approach (not an alternative) was
       chosen given the evidenced coupling, ownership, and risk in the dependency assessment.
@@ -75,9 +78,20 @@ prompts:
       every unit price deterministically from the Azure Retail Prices API and reports missing
       coverage. Include one query per independently billed Azure service the *proposed*
       architecture would add, change, or newly require - omit pricing_queries entirely when the
-      capability does not change what is deployed or its hosting costs. Each changed file must
-      contain complete replacement content. Return at most 20 proposed_components, 20
-      deployment_plan steps, and 10 pricing queries. Do not return Markdown fences.
+      capability does not change what is deployed or its hosting costs. When you omit
+      pricing_queries for that reason, populate illustrative_pricing_queries instead (same
+      fields and rules) with your best-effort estimate of what a typical, minimal Azure
+      deployment of this workload's existing, unchanged technology stack would cost - grounded
+      in the dependency assessment's detected language, framework, and any existing
+      infrastructure files (for example one small always-on instance sized for a workload of
+      this type) - this is shown to the user as a clearly labeled illustrative baseline, never
+      as a claim about their actual current spend, so a reasonable, evidenced assumption is
+      expected even though nothing is actually changing. Leave both pricing_queries and
+      illustrative_pricing_queries empty only when there truly is not enough evidence in the
+      dependency assessment to ground even an illustrative baseline (e.g. no detected
+      language/runtime at all). Each changed file must contain complete replacement content.
+      Return at most 20 proposed_components, 20 deployment_plan steps, and 10 entries combined
+      across pricing_queries and illustrative_pricing_queries. Do not return Markdown fences.
     variables:
       - repository_full_name
       - base_commit

@@ -240,6 +240,77 @@ async def test_generate_plan_resolves_a_real_cost_estimate_through_the_pricing_s
     assert plan.estimated_cost.monthly_amount == 42.5
     assert plan.estimated_cost.coverage == "complete"
     assert len(pricing_service.received_queries) == 1
+    assert plan.estimated_cost.is_illustrative is False
+
+
+async def test_generate_plan_falls_back_to_an_illustrative_estimate_when_pricing_queries_is_empty() -> None:
+    from app.discovery.models import CostEstimate
+
+    class _FakePricingService:
+        def __init__(self) -> None:
+            self.received_queries: list[Any] = []
+
+        async def estimate(self, queries: list[Any]) -> CostEstimate:
+            self.received_queries = queries
+            return CostEstimate(region="eastus", monthly_amount=12.3, coverage="complete")
+
+    # No pricing_queries (this capability doesn't change hosting costs -
+    # see modernization-plan-v1), but the Build Agent still supplied an
+    # illustrative baseline for the existing, unchanged stack.
+    payload = {
+        **_VALID_PAYLOAD,
+        "illustrative_pricing_queries": [
+            {
+                "service_name": "Azure Container Apps",
+                "arm_region_name": "eastus",
+                "units_per_month": 730,
+                "assumption": "One small always-on single-replica container app.",
+            }
+        ],
+    }
+    orchestrator = _ScriptedOrchestrator([json.dumps(payload)])
+    pricing_service = _FakePricingService()
+    service = await _build_service(orchestrator=orchestrator, pricing_service=pricing_service)
+
+    plan = await _generate(service)
+
+    assert plan.estimated_cost is not None
+    assert plan.estimated_cost.monthly_amount == 12.3
+    assert plan.estimated_cost.is_illustrative is True
+    assert len(pricing_service.received_queries) == 1
+    assert pricing_service.received_queries[0].assumption == (
+        "One small always-on single-replica container app."
+    )
+
+
+async def test_generate_plan_stays_unavailable_when_illustrative_pricing_also_fails_to_resolve() -> None:
+    from app.discovery.models import CostEstimate
+
+    class _FakePricingService:
+        async def estimate(self, queries: list[Any]) -> CostEstimate:
+            return CostEstimate(region="unknown", coverage="unavailable")
+
+    payload = {
+        **_VALID_PAYLOAD,
+        "illustrative_pricing_queries": [
+            {
+                "service_name": "Azure Container Apps",
+                "arm_region_name": "eastus",
+                "units_per_month": 730,
+                "assumption": "One small always-on single-replica container app.",
+            }
+        ],
+    }
+    orchestrator = _ScriptedOrchestrator([json.dumps(payload)])
+    service = await _build_service(orchestrator=orchestrator, pricing_service=_FakePricingService())
+
+    plan = await _generate(service)
+
+    # The real lookup itself failed (e.g. no matching retail price) - must
+    # not be mislabeled as a successful illustrative estimate.
+    assert plan.estimated_cost is not None
+    assert plan.estimated_cost.coverage == "unavailable"
+    assert plan.estimated_cost.is_illustrative is False
 
 
 async def test_generate_plan_builds_the_proposed_component_graph() -> None:

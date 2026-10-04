@@ -87,6 +87,7 @@ class _GeneratedPlan(BaseModel):
     residual_risks: list[str] = Field(default_factory=list)
     rollback: str = Field(min_length=1)
     pricing_queries: list[PricingQuery] = Field(default_factory=list)
+    illustrative_pricing_queries: list[PricingQuery] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _depends_on_reference_known_components(self) -> _GeneratedPlan:
@@ -282,11 +283,7 @@ class ModernizationService:
         generated = await self._generate_plan_contents(
             variables=variables, session_id=session_id, trace_id=trace_id
         )
-        estimated_cost = (
-            await self._pricing_service.estimate(generated.pricing_queries)
-            if self._pricing_service is not None
-            else _PRICING_UNAVAILABLE
-        )
+        estimated_cost = await self._estimate_plan_cost(generated)
 
         now = datetime.now(UTC)
         plan_id = str(uuid4())
@@ -313,6 +310,7 @@ class ModernizationService:
             residual_risks=generated.residual_risks,
             rollback=generated.rollback,
             pricing_queries=generated.pricing_queries,
+            illustrative_pricing_queries=generated.illustrative_pricing_queries,
             estimated_cost=estimated_cost,
             branch_name=f"genie/modernize-{plan_id[:8]}",
             created_at=now,
@@ -373,6 +371,26 @@ class ModernizationService:
                     "response as fresh JSON with no Markdown fences."
                 )
         raise ModernizationError("Modernization plan generation retry loop exited unexpectedly.")
+
+    async def _estimate_plan_cost(self, generated: _GeneratedPlan) -> CostEstimate:
+        """Resolves the plan's real, incremental cost from pricing_queries
+        when present. When the Build Agent left pricing_queries empty
+        (this capability doesn't change hosting costs - see
+        modernization-plan-v1's prompt), falls back to a clearly-marked
+        illustrative baseline from illustrative_pricing_queries if the
+        agent supplied one, so the user sees a labeled estimate instead of
+        a bare "Unavailable" whenever a reasonable baseline exists."""
+        if self._pricing_service is None:
+            return _PRICING_UNAVAILABLE
+        if generated.pricing_queries:
+            return await self._pricing_service.estimate(generated.pricing_queries)
+        if generated.illustrative_pricing_queries:
+            illustrative = await self._pricing_service.estimate(
+                generated.illustrative_pricing_queries
+            )
+            if illustrative.coverage != "unavailable":
+                return illustrative.model_copy(update={"is_illustrative": True})
+        return _PRICING_UNAVAILABLE
 
     async def execute_plan(
         self,

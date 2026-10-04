@@ -39,6 +39,7 @@ export interface ModernizationPlan {
   residual_risks: string[];
   rollback: string;
   pricing_queries: PricingQuery[];
+  illustrative_pricing_queries: PricingQuery[];
   estimated_cost: CostEstimate | null;
   branch_name: string;
   status:

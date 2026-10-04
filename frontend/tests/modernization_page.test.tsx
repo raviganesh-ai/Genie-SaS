@@ -420,6 +420,51 @@ describe("ModernizationPage", () => {
     expect(screen.queryByText(/retail pricing coverage/i)).not.toBeInTheDocument();
   });
 
+  it("shows a clearly-labeled illustrative estimate when the plan has no pricing queries but a resolved baseline", async () => {
+    const plan = {
+      ...BASE_PLAN,
+      pricing_queries: [],
+      illustrative_pricing_queries: [
+        {
+          service_name: "Azure Container Apps",
+          arm_region_name: "eastus",
+          units_per_month: 730,
+          assumption: "One small always-on single-replica container app.",
+        },
+      ],
+      estimated_cost: {
+        currency_code: "USD",
+        region: "eastus",
+        monthly_amount: 12.3,
+        annual_amount: 147.6,
+        coverage: "complete",
+        assumptions: ["One small always-on single-replica container app."],
+        source_urls: [],
+        retrieved_at: "2026-01-01T00:00:00Z",
+        is_illustrative: true,
+      },
+    };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("$12.30")).toBeInTheDocument();
+    expect(screen.getByText("$147.60")).toBeInTheDocument();
+    expect(screen.getByText(/Illustrative baseline - not a quote/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/best-effort estimate of what a typical deployment/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No additional Azure cost expected/i)).not.toBeInTheDocument();
+  });
+
   it("does not double-number a deployment plan step that already has its own leading ordinal", async () => {
     const plan = {
       ...BASE_PLAN,

@@ -664,7 +664,7 @@ export function ModernizationPage(): JSX.Element {
                     </ul>
                   </div>
                 ) : null}
-                {plan.pricing_queries.length === 0 ? (
+                {plan.pricing_queries.length === 0 && !cost?.is_illustrative ? (
                   <div className="modernization-cost">
                     <Text weight="semibold">Estimated cost of modernization</Text>
                     <Text size={300} style={{ opacity: 0.72 }}>
@@ -676,8 +676,19 @@ export function ModernizationPage(): JSX.Element {
                   <div className="modernization-cost">
                     <div className="dependency-mapping-heading">
                       <Text weight="semibold">Estimated cost of modernization</Text>
-                      <Badge appearance="outline">{cost.coverage} retail pricing coverage</Badge>
+                      <Badge appearance="outline">
+                        {cost.is_illustrative
+                          ? "Illustrative baseline - not a quote"
+                          : `${cost.coverage} retail pricing coverage`}
+                      </Badge>
                     </div>
+                    {cost.is_illustrative ? (
+                      <Text size={200} style={{ opacity: 0.72 }}>
+                        This capability doesn't change hosting costs - shown below is a
+                        best-effort estimate of what a typical deployment of this workload's
+                        existing, unchanged stack costs, not a quote for your actual environment.
+                      </Text>
+                    ) : null}
                     <div style={{ display: "flex", gap: 24 }}>
                       <div>
                         <Text size={200} style={{ opacity: 0.72 }}>Estimated monthly</Text>
