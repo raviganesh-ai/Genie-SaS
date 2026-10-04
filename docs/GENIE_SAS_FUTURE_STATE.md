@@ -533,7 +533,6 @@ selects one configured, repository-scoped capability:
 - Standards conformance remediation.
 - Modernization strategy recommendation.
 - Rehost to Azure (lift-and-shift).
-- Replatform (swap runtime or hosting foundation).
 - Monolith to modular.
 
 Capabilities that require a destination accept only a bounded target value,
@@ -553,10 +552,9 @@ retire, replace, rehost, relocate, replatform, and refactor options per
 workload component evidenced in the repository assessment, and explains why
 the recommended option is preferable to lower-cost or lower-risk
 alternatives. This capability only recommends - it produces a report, not
-code changes. Rehost, replatform, and the modular-monolith refactor are the
-options Genie can also actually *execute* as their own separate capabilities
-above; retain, retire, replace, and relocate remain recommendation-only
-today.
+code changes. Rehost and the modular-monolith refactor are the options Genie
+can also actually *execute* as their own separate capabilities above; retain,
+retire, replace, relocate, and replatform remain recommendation-only today.
 
 ### Azure target selection
 
@@ -581,13 +579,13 @@ rollout steps as a local, client-side checklist so the user can track
 progress through them - this capability does not provision new
 infrastructure itself, so it has no separate deployment or approval step.
 
-### Real deployment verification (Rehost and Replatform)
+### Real deployment verification (Rehost)
 
-For the Rehost and Replatform capabilities specifically, once a plan's pull
-request has been opened Genie goes beyond proposing code changes: it offers
-to actually stand the modernized branch up on real Azure infrastructure and
-prove it works, rather than stopping at a document or a merged diff the user
-still has to deploy and verify by hand.
+For the Rehost capability specifically, once a plan's pull request has been
+opened Genie goes beyond proposing code changes: it offers to actually stand
+the modernized branch up on real Azure infrastructure and prove it works,
+rather than stopping at a document or a merged diff the user still has to
+deploy and verify by hand.
 
 - Genie (the Foundry Build Agent) proposes a concrete deployment strategy
   grounded only in the plan's own changed files - for example, reading the

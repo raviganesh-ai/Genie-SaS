@@ -55,18 +55,18 @@ const CAPABILITY_TARGET_OPTIONS: Record<string, string[]> = {
  * Every other capability either doesn't change what's deployed
  * (dependency/runtime/framework upgrades) or has its own distinct
  * walkthrough (monolith_modularization, below). */
-const DEPLOYABLE_CAPABILITY_IDS = new Set(["rehost_lift_and_shift", "replatform"]);
+const DEPLOYABLE_CAPABILITY_IDS = new Set(["rehost_lift_and_shift"]);
 
 /** Every capability's execute_plan opens a real branch + draft PR with
- * complete file content (never just a recommendation) - but only
- * Rehost/Replatform (ModernizationDeploymentPanel) and
- * monolith_modularization (ModernizationWalkthrough) get a further,
- * dedicated post-PR UI. Real user feedback: leaving the other capabilities
- * silent after the PR link made it unclear whether anything had actually
- * happened. This note makes explicit, per capability, what the PR already
- * contains and what (if anything) to do next - strategy_recommendation's
- * PR holds an analysis document rather than a code change, so it gets its
- * own distinct wording. */
+ * complete file content (never just a recommendation) - but only Rehost
+ * (ModernizationDeploymentPanel) and monolith_modularization
+ * (ModernizationWalkthrough) get a further, dedicated post-PR UI. Real
+ * user feedback: leaving the other capabilities silent after the PR link
+ * made it unclear whether anything had actually happened. This note makes
+ * explicit, per capability, what the PR already contains and what (if
+ * anything) to do next - strategy_recommendation's PR holds an analysis
+ * document rather than a code change, so it gets its own distinct
+ * wording. */
 const POST_PR_GUIDANCE: Record<string, string> = {
   runtime_upgrade:
     "This draft PR already contains the real runtime/language upgrade - review and merge it "
@@ -113,7 +113,6 @@ const REWRITE_STRATEGY_LABELS: Record<string, string> = {
   dependency_upgrade: "Dependency upgrade rationale",
   strategy_recommendation: "Recommendation rationale",
   rehost_lift_and_shift: "Migration strategy",
-  replatform: "Replatform strategy",
   monolith_modularization: "Rewrite strategy",
 };
 

@@ -10,13 +10,13 @@ import type { ApprovalRequest } from "@/types/governance";
 import type { ModernizationDeployment } from "@/types/modernization";
 
 /**
- * "What's next" for a Rehost/Replatform plan whose pull request has
- * already been opened: Genie proposes a concrete, evidence-grounded Azure
- * Container Apps deployment strategy, asks for a separate governance
- * decision (billable real infrastructure is a distinct decision from the
- * plan's own PR approval), then actually builds the plan's branch in ACR
- * and deploys it, verifying the live app responds before calling it
- * healthy - never just generating a strategy document and stopping.
+ * "What's next" for a Rehost plan whose pull request has already been
+ * opened: Genie proposes a concrete, evidence-grounded Azure Container
+ * Apps deployment strategy, asks for a separate governance decision
+ * (billable real infrastructure is a distinct decision from the plan's
+ * own PR approval), then actually builds the plan's branch in ACR and
+ * deploys it, verifying the live app responds before calling it healthy
+ * - never just generating a strategy document and stopping.
  */
 export function ModernizationDeploymentPanel({
   sessionId,

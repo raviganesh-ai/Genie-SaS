@@ -20,7 +20,6 @@ def test_loads_bounded_modernization_capabilities() -> None:
         "dependency_upgrade",
         "strategy_recommendation",
         "rehost_lift_and_shift",
-        "replatform",
         "monolith_modularization",
     ]
     assert catalog.get("runtime_upgrade").instruction("Python 3.12").startswith(
@@ -55,7 +54,7 @@ def test_strategy_recommendation_requires_no_target_and_evaluates_all_options() 
         catalog.get("strategy_recommendation").instruction("arbitrary")
 
 
-def test_rehost_and_replatform_require_a_bounded_target() -> None:
+def test_rehost_requires_a_bounded_target() -> None:
     catalog = load_modernization_capabilities(CONFIG_ROOT)
 
     assert catalog.get("rehost_lift_and_shift").instruction("Azure Container Apps").startswith(
@@ -63,12 +62,6 @@ def test_rehost_and_replatform_require_a_bounded_target() -> None:
     )
     with pytest.raises(ModernizationCapabilityError, match="requires"):
         catalog.get("rehost_lift_and_shift").instruction(None)
-
-    assert catalog.get("replatform").instruction("Azure SQL Database").startswith(
-        "Replatform this workload onto Azure SQL Database"
-    )
-    with pytest.raises(ModernizationCapabilityError, match="requires"):
-        catalog.get("replatform").instruction(None)
 
 
 def test_monolith_modularization_requires_no_target_and_prefers_strangler_pattern() -> None:

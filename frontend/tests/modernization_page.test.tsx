@@ -428,7 +428,6 @@ describe("ModernizationPage", () => {
   it("labels the rewrite_strategy section differently per capability, since each is a genuinely different operation", async () => {
     const cases: Array<[string | null, string]> = [
       ["rehost_lift_and_shift", "Migration strategy"],
-      ["replatform", "Replatform strategy"],
       ["dependency_upgrade", "Dependency upgrade rationale"],
       ["strategy_recommendation", "Recommendation rationale"],
       [null, "Strategy rationale"],

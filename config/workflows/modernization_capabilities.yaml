@@ -64,17 +64,6 @@ capabilities:
       passing its existing tests exactly as before - verify every changed
       manifest line against the actual source files' imports and APIs in the
       dependency assessment before proposing it.
-  - id: replatform
-    name: Replatform (swap runtime or hosting foundation)
-    description: >-
-      Swap an underlying runtime, hosting platform, or data platform for the
-      specified target while preserving the application's architecture.
-    target_label: Target platform or managed service
-    instruction_template: >-
-      Replatform this workload onto {target}, changing only the runtime, hosting,
-      data-access, or configuration layers required to run on that platform.
-      Preserve the application's existing architecture, module boundaries, and
-      business behavior.
   - id: monolith_modularization
     name: Monolith to modular
     description: >-
