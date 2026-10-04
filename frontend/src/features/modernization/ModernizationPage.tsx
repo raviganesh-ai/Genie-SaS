@@ -57,6 +57,46 @@ const CAPABILITY_TARGET_OPTIONS: Record<string, string[]> = {
  * walkthrough (monolith_modularization, below). */
 const DEPLOYABLE_CAPABILITY_IDS = new Set(["rehost_lift_and_shift", "replatform"]);
 
+/** Human-readable labels for a plan's raw, snake_case lifecycle `status`
+ * field - shown verbatim before this (e.g. "pending_approval") read as a
+ * rendering glitch rather than real status text. */
+const PLAN_STATUS_LABELS: Record<string, string> = {
+  pending_approval: "Pending approval",
+  pull_request_opened: "Pull request opened",
+  failed: "Failed",
+};
+
+function formatPlanStatus(status: string): string {
+  return PLAN_STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+}
+
+/** The Build Agent sometimes writes its own "1. ", "2) " etc. prefix
+ * directly into a deployment_plan step's text. Rendered inside an <ol>
+ * (which numbers every <li> itself), that produced a real, confusing
+ * "1. 1. Create..." double-numbering bug - strip any such prefix so the
+ * list's own numbering is always the only one shown, regardless of
+ * whether a given model run happened to add its own. */
+function stripLeadingOrdinal(step: string): string {
+  return step.replace(/^\s*\d+[.)]\s+/, "");
+}
+
+/** Past this many changed files, collapse the list behind a toggle - a
+ * wide capability like monolith_modularization can easily touch 20+
+ * files, and showing every one by default dominated the page (real user
+ * feedback: "can this be presented better"). */
+const FILE_LIST_COLLAPSE_THRESHOLD = 6;
+
+function toggleSetMember<T>(set: Set<T>, value: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next;
+}
+
+
 export function ModernizationPage(): JSX.Element {
   const navigate = useNavigate();
   const { sessionId } = useSessionContext();
@@ -98,6 +138,20 @@ export function ModernizationPage(): JSX.Element {
   const [generatingStartedAt, setGeneratingStartedAt] = useState<string | null>(null);
   const [executingPlanId, setExecutingPlanId] = useState<string | null>(null);
   const [executingStartedAt, setExecutingStartedAt] = useState<string | null>(null);
+  // Refining a plan always generates an *additional*, independently
+  // approvable plan rather than editing the one being refined (see
+  // refine() below), so a session can accumulate several supersede-chain
+  // plans for the same repository/capability. Showing every one of them
+  // fully expanded made the page look like the same analysis "just
+  // repeats" (real user feedback) - so only the newest plan (plans[0],
+  // since new ones are prepended) is expanded by default; older ones
+  // collapse to a compact summary row the user can still expand on demand.
+  const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(new Set());
+  // The list of changed files on a plan can run into the dozens for a
+  // wide capability like monolith_modularization (real example: 23 files)
+  // - collapsed by default past a small threshold so it doesn't dominate
+  // the page, with a toggle to see the full list.
+  const [expandedFileListIds, setExpandedFileListIds] = useState<Set<string>>(new Set());
   // Tracks a chat-driven "Refine this plan" request (see
   // ModernizationPlanChat and the refine() callback below) - regenerates a
   // brand-new, independently approvable plan incorporating the user's
@@ -524,7 +578,7 @@ export function ModernizationPage(): JSX.Element {
           />
         ) : null}
       </Card>
-      {plans.map((plan) => {
+      {plans.map((plan, planIndex) => {
         // A plan's own `status` field stays "pending_approval" for its
         // entire lifetime up to execution (see
         // ModernizationService.execute_plan) - the real approve/reject
@@ -544,96 +598,139 @@ export function ModernizationPage(): JSX.Element {
           : null;
         const formatCost = (amount: number | null) =>
           amount === null || !currencyFormatter ? "Unavailable" : currencyFormatter.format(amount);
+        // New plans are prepended (see generate()/refine() above), so
+        // index 0 is always the newest - expand it by default and let
+        // every earlier, superseded plan start collapsed.
+        const isLatest = planIndex === 0;
+        const isExpanded = isLatest || expandedPlanIds.has(plan.id);
+        const toggleExpanded = () =>
+          setExpandedPlanIds((current) => toggleSetMember(current, plan.id));
+        const isFileListExpanded = expandedFileListIds.has(plan.id);
+        const toggleFileList = () =>
+          setExpandedFileListIds((current) => toggleSetMember(current, plan.id));
+        const visibleChanges =
+          plan.changes.length <= FILE_LIST_COLLAPSE_THRESHOLD || isFileListExpanded
+            ? plan.changes
+            : plan.changes.slice(0, FILE_LIST_COLLAPSE_THRESHOLD);
         return (
           <Card className="repository-intake-card" key={plan.id}>
             <div className="dependency-mapping-heading">
-              <Text weight="semibold">{plan.summary}</Text>
-              <Badge>{plan.status}</Badge>
+              <Text weight="semibold" style={{ flex: "1 1 320px", minWidth: 0 }}>{plan.summary}</Text>
+              <Badge style={{ flexShrink: 0 }}>{formatPlanStatus(plan.status)}</Badge>
             </div>
             <Text size={200} className="repository-commit">{plan.base_commit}</Text>
             <Text block>
               {plan.capability_name ?? "Legacy modernization plan"}
               {plan.target ? `: ${plan.target}` : ""}
             </Text>
-            {plan.rewrite_strategy ? (
-              <div>
-                <Text weight="semibold">Rewrite strategy</Text>
-                <Text block size={300}>{plan.rewrite_strategy}</Text>
-              </div>
-            ) : null}
-            {plan.proposed_components.length > 0 ? (
-              <ModernizationArchitectureGraph components={plan.proposed_components} />
-            ) : null}
-            {plan.deployment_plan.length > 0 ? (
-              <div>
-                <Text weight="semibold">Deployment plan</Text>
-                <ol style={{ margin: "4px 0 0", paddingLeft: 20 }}>
-                  {plan.deployment_plan.map((step, index) => (
-                    <li key={index}><Text size={300}>{step}</Text></li>
-                  ))}
-                </ol>
-              </div>
-            ) : null}
-            {plan.residual_risks.length > 0 ? (
-              <div>
-                <Text weight="semibold">Constraints and residual risks</Text>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
-                  {plan.residual_risks.map((risk, index) => (
-                    <li key={index}><Text size={300}>{risk}</Text></li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {cost ? (
-              <div className="modernization-cost">
-                <div className="dependency-mapping-heading">
-                  <Text weight="semibold">Estimated cost of modernization</Text>
-                  <Badge appearance="outline">{cost.coverage} retail pricing coverage</Badge>
-                </div>
-                <div style={{ display: "flex", gap: 24 }}>
-                  <div>
-                    <Text size={200} style={{ opacity: 0.72 }}>Estimated monthly</Text>
-                    <Text size={500} weight="bold" block>{formatCost(cost.monthly_amount)}</Text>
-                  </div>
-                  <div>
-                    <Text size={200} style={{ opacity: 0.72 }}>Estimated annual</Text>
-                    <Text size={500} weight="bold" block>{formatCost(cost.annual_amount)}</Text>
-                  </div>
-                </div>
-                {cost.assumptions.length > 0 ? (
-                  <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
-                    {cost.assumptions.map((assumption, index) => (
-                      <li key={index}><Text size={200} style={{ opacity: 0.72 }}>{assumption}</Text></li>
-                    ))}
-                  </ul>
-                ) : null}
-                <Text size={200} style={{ opacity: 0.55 }}>
-                  Azure consumption estimate only; implementation, support, taxes, and negotiated
-                  discounts are excluded.
+            {!isLatest ? (
+              <div className="dependency-mapping-heading">
+                <Text size={200} style={{ opacity: 0.72 }}>
+                  Superseded by a newer refinement of this plan - kept here for governance history.
                 </Text>
+                <Button appearance="transparent" size="small" onClick={toggleExpanded}>
+                  {isExpanded ? "Hide details" : "Show details"}
+                </Button>
               </div>
             ) : null}
-            <Text>{plan.changes.length} complete file change(s) on {plan.branch_name}</Text>
-            {plan.changes.map((change) => (
-              <div className="standards-rule" key={change.path}>
-                <Badge>file</Badge>
-                <div><Text>{change.path}</Text><Text block size={200}>{change.reason}</Text></div>
-              </div>
-            ))}
-            {plan.capability_id ? (
-              <ModernizationPlanChat
-                sessionId={sessionId}
-                planId={plan.id}
-                onRefine={(notes) => void refine(plan, notes)}
-                refining={refiningPlanId === plan.id}
-              />
-            ) : null}
-            {refiningPlanId === plan.id ? (
-              <AgentActivityAnimation
-                label="Azure AI Foundry is regenerating this plan with your feedback..."
-                startedAt={refiningStartedAt}
-                fallbackDetail="This can take a little while - this is still working."
-              />
+            {isExpanded ? (
+              <>
+                {plan.rewrite_strategy ? (
+                  <div>
+                    <Text weight="semibold">Rewrite strategy</Text>
+                    <Text block size={300}>{plan.rewrite_strategy}</Text>
+                  </div>
+                ) : null}
+                {plan.proposed_components.length > 0 ? (
+                  <ModernizationArchitectureGraph components={plan.proposed_components} />
+                ) : null}
+                {plan.deployment_plan.length > 0 ? (
+                  <div>
+                    <Text weight="semibold">Deployment plan</Text>
+                    <ol style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                      {plan.deployment_plan.map((step, index) => (
+                        <li key={index}><Text size={300}>{stripLeadingOrdinal(step)}</Text></li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
+                {plan.residual_risks.length > 0 ? (
+                  <div>
+                    <Text weight="semibold">Constraints and residual risks</Text>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                      {plan.residual_risks.map((risk, index) => (
+                        <li key={index}><Text size={300}>{risk}</Text></li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {plan.pricing_queries.length === 0 ? (
+                  <div className="modernization-cost">
+                    <Text weight="semibold">Estimated cost of modernization</Text>
+                    <Text size={300} style={{ opacity: 0.72 }}>
+                      No additional Azure cost expected - this capability doesn't change what's
+                      deployed or add any new Azure service.
+                    </Text>
+                  </div>
+                ) : cost ? (
+                  <div className="modernization-cost">
+                    <div className="dependency-mapping-heading">
+                      <Text weight="semibold">Estimated cost of modernization</Text>
+                      <Badge appearance="outline">{cost.coverage} retail pricing coverage</Badge>
+                    </div>
+                    <div style={{ display: "flex", gap: 24 }}>
+                      <div>
+                        <Text size={200} style={{ opacity: 0.72 }}>Estimated monthly</Text>
+                        <Text size={500} weight="bold" block>{formatCost(cost.monthly_amount)}</Text>
+                      </div>
+                      <div>
+                        <Text size={200} style={{ opacity: 0.72 }}>Estimated annual</Text>
+                        <Text size={500} weight="bold" block>{formatCost(cost.annual_amount)}</Text>
+                      </div>
+                    </div>
+                    {cost.assumptions.length > 0 ? (
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                        {cost.assumptions.map((assumption, index) => (
+                          <li key={index}><Text size={200} style={{ opacity: 0.72 }}>{assumption}</Text></li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <Text size={200} style={{ opacity: 0.55 }}>
+                      Azure consumption estimate only; implementation, support, taxes, and negotiated
+                      discounts are excluded.
+                    </Text>
+                  </div>
+                ) : null}
+                <Text>{plan.changes.length} complete file change(s) on {plan.branch_name}</Text>
+                {visibleChanges.map((change) => (
+                  <div className="standards-rule" key={change.path}>
+                    <Badge>file</Badge>
+                    <div><Text>{change.path}</Text><Text block size={200}>{change.reason}</Text></div>
+                  </div>
+                ))}
+                {plan.changes.length > FILE_LIST_COLLAPSE_THRESHOLD ? (
+                  <Button appearance="transparent" size="small" onClick={toggleFileList}>
+                    {isFileListExpanded
+                      ? "Show fewer file changes"
+                      : `Show all ${plan.changes.length} file changes`}
+                  </Button>
+                ) : null}
+                {plan.capability_id ? (
+                  <ModernizationPlanChat
+                    sessionId={sessionId}
+                    planId={plan.id}
+                    onRefine={(notes) => void refine(plan, notes)}
+                    refining={refiningPlanId === plan.id}
+                  />
+                ) : null}
+                {refiningPlanId === plan.id ? (
+                  <AgentActivityAnimation
+                    label="Azure AI Foundry is regenerating this plan with your feedback..."
+                    startedAt={refiningStartedAt}
+                    fallbackDetail="This can take a little while - this is still working."
+                  />
+                ) : null}
+              </>
             ) : null}
             {plan.pull_request_url ? (
               <>

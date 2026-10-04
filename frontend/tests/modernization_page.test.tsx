@@ -302,7 +302,10 @@ describe("ModernizationPage", () => {
     // The plan card must reflect the server's real post-failure state
     // (reloaded via load()), not keep showing the stale "pending_approval"
     // badge and an enabled Execute button that would just fail again.
-    expect(await screen.findByText("failed")).toBeInTheDocument();
+    // ("Failed" - human-readable via formatPlanStatus, not the raw
+    // "failed" status string, which used to render as unlabeled,
+    // oddly-wrapped badge text - see ModernizationPage's status badge fix.)
+    expect(await screen.findByText("Failed")).toBeInTheDocument();
   });
 
   it("shows the rewrite strategy, proposed architecture graph, deployment plan, constraints, and estimated cost", async () => {
@@ -327,6 +330,24 @@ describe("ModernizationPage", () => {
       ],
       deployment_plan: ["Ship behind a feature flag.", "Run the strangler proxy in shadow mode."],
       residual_risks: ["Requires a backward-compatible database migration window."],
+      // A real estimated_cost is always derived from at least one
+      // pricing_queries entry - an empty array (this fixture's default)
+      // means "no Azure cost impact", which the page now renders as a
+      // reassuring note instead of this cost card (see
+      // ModernizationPage's pricing_queries.length === 0 branch).
+      pricing_queries: [
+        {
+          service_name: "Virtual Machines",
+          retail_service_name: "Virtual Machines",
+          product_name: "Standard_D2s_v5",
+          arm_region_name: "eastus",
+          sku_name: "Standard_D2s_v5",
+          meter_name: "D2s v5 Compute Hours",
+          unit_of_measure: "1 Hour",
+          units_per_month: 730,
+          assumption: "One always-on P1v3 instance.",
+        },
+      ],
       estimated_cost: {
         currency_code: "USD",
         region: "eastus",
@@ -372,6 +393,82 @@ describe("ModernizationPage", () => {
     expect(screen.getByText("Estimated cost of modernization")).toBeInTheDocument();
     expect(screen.getByText("$42.50")).toBeInTheDocument();
     expect(screen.getByText("$510.00")).toBeInTheDocument();
+  });
+
+  it("shows a reassuring no-cost note instead of 'Unavailable' when the plan has no pricing queries", async () => {
+    // BASE_PLAN's pricing_queries is empty, matching a capability like
+    // monolith_modularization that doesn't change what's deployed - this
+    // must read as "nothing to price", not as a failed pricing lookup.
+    const plan = { ...BASE_PLAN };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Estimated cost of modernization")).toBeInTheDocument();
+    expect(
+      screen.getByText(/No additional Azure cost expected/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByText(/retail pricing coverage/i)).not.toBeInTheDocument();
+  });
+
+  it("does not double-number a deployment plan step that already has its own leading ordinal", async () => {
+    const plan = {
+      ...BASE_PLAN,
+      deployment_plan: ["1. Create the module packages.", "2. Move the shared kernel interfaces."],
+    };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("Create the module packages.")).toBeInTheDocument();
+    expect(screen.getByText("Move the shared kernel interfaces.")).toBeInTheDocument();
+    expect(screen.queryByText(/^1\.\s*1\./)).not.toBeInTheDocument();
+    expect(screen.queryByText("1. Create the module packages.")).not.toBeInTheDocument();
+  });
+
+  it("collapses the file-change list behind a toggle once it exceeds the threshold", async () => {
+    const changes = Array.from({ length: 9 }, (_, index) => ({
+      path: `src/main/java/com/example/Module${index}.java`,
+      content: "unused in this test",
+      reason: `Relocated class ${index}.`,
+    }));
+    const plan = { ...BASE_PLAN, changes };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    const user = userEvent.setup();
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(await screen.findByText("9 complete file change(s) on genie/modernize-plan1")).toBeInTheDocument();
+    expect(screen.getByText("Module0.java", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("Module8.java", { exact: false })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Show all 9 file changes/i }));
+    expect(await screen.findByText("Module8.java", { exact: false })).toBeInTheDocument();
   });
 
   it("omits the proposed architecture graph when the plan has no components to show", async () => {
@@ -440,6 +537,11 @@ describe("ModernizationPage", () => {
       ...BASE_PLAN,
       id: "plan-2",
       summary: "Upgraded the runtime, keeping retries unchanged.",
+      // Distinct from BASE_PLAN's rewrite_strategy so the two plans'
+      // content is distinguishable below - otherwise both cards would
+      // contain identical text and the collapse assertion couldn't tell
+      // which card it actually came from.
+      rewrite_strategy: "Keep the existing retry wrapper; only bump the interpreter version.",
     };
 
     const fetchMock = mockFetchSequence([
@@ -473,6 +575,23 @@ describe("ModernizationPage", () => {
     const body = JSON.parse(generateInit.body as string);
     expect(body.previous_plan_id).toBe("plan-1");
     expect(body.refinement_notes).toBe("Keep the existing retry behavior unchanged.");
+
+    // The superseded original plan (BASE_PLAN) collapses by default - its
+    // own content must not still be on the page, which is what made the
+    // "whole analysis just repeats" (real user feedback).
+    expect(
+      screen.queryByText("Upgrade in place; no architectural change is required."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Superseded by a newer refinement of this plan/i),
+    ).toBeInTheDocument();
+
+    // It stays fully inspectable on demand, though - this is governance
+    // history, not deleted data.
+    await user.click(screen.getByRole("button", { name: /Show details/i }));
+    expect(
+      await screen.findByText("Upgrade in place; no architectural change is required."),
+    ).toBeInTheDocument();
   });
 
   it("shows the inline Approve/Reject decision immediately after generating a plan, without a full page reload", async () => {
