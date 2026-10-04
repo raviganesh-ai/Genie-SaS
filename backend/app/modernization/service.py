@@ -511,12 +511,16 @@ class ModernizationService:
         trace_id: str,
     ) -> ModernizationPlanChatAnswer:
         """Answers one free-text question about an already-generated
-        modernization plan - grounded only in that plan's own JSON, never
-        requiring the repository to be re-read or answering from general
-        knowledge. Mirrors RepositoryAssessmentService.ask's identical
-        contract and retry behavior; see that method's docstring for why
-        this fails closed (raises) rather than returning a degraded
-        answer."""
+        modernization plan. Facts about the specific repository/plan are
+        grounded only in that plan's own JSON, never requiring the
+        repository to be re-read - but advisory "how do we..." questions
+        about cross-cutting concerns (security, reliability, etc.) may also
+        draw on genuine Azure Well-Architected Framework guidance, mirroring
+        the same allowance already granted during plan generation (see
+        modernization-plan-chat-v1's prompt template). Mirrors
+        RepositoryAssessmentService.ask's identical contract and retry
+        behavior; see that method's docstring for why this fails closed
+        (raises) rather than returning a degraded answer."""
         await self._session_service.get_session(
             session_id=session_id, requesting_user_id=requesting_user_id
         )
