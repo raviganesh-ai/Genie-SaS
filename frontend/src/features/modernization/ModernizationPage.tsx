@@ -705,7 +705,7 @@ export function ModernizationPage(): JSX.Element {
           />
         ) : null}
       </Card>
-      {plans.map((plan, planIndex) => {
+      {plans.map((plan) => {
         // A plan's own `status` field stays "pending_approval" for its
         // entire lifetime up to execution (see
         // ModernizationService.execute_plan) - the real approve/reject
@@ -725,11 +725,29 @@ export function ModernizationPage(): JSX.Element {
           : null;
         const formatCost = (amount: number | null) =>
           amount === null || !currencyFormatter ? "Unavailable" : currencyFormatter.format(amount);
-        // New plans are prepended (see generate()/refine() above), so
-        // index 0 is always the newest - expand it by default and let
-        // every earlier, superseded plan start collapsed.
-        const isLatest = planIndex === 0;
-        const isExpanded = isLatest || expandedPlanIds.has(plan.id);
+        // The plan this one refined (if any) and the plan that refined
+        // this one (if any) - both already loaded in `plans` state, so a
+        // real file-level diff needs no extra backend call. See
+        // diffPlanChanges and ModernizationPlan.previous_plan_id.
+        const refinedFromPlan = plan.previous_plan_id
+          ? plans.find((candidate) => candidate.id === plan.previous_plan_id)
+          : undefined;
+        const supersededByPlan = plans.find((candidate) => candidate.previous_plan_id === plan.id);
+        // Only a plan that was *actually* refined into a newer version
+        // (linked via previous_plan_id) counts as superseded and starts
+        // collapsed - a plan simply being older than some other,
+        // unrelated plan elsewhere in the session (a different
+        // repository and/or capability) is not a refinement relationship
+        // and must stay expanded on its own merits. Real bug found via
+        // live UI testing: this used to key off "is this the single
+        // newest plan in the whole session" (index 0 after newest-first
+        // prepending), so an already-completed, unrelated plan for one
+        // repository/capability incorrectly showed "Superseded by a newer
+        // refinement of this plan" the moment *any* newer plan for a
+        // *different* repository/capability was generated in the same
+        // session.
+        const isSuperseded = Boolean(supersededByPlan);
+        const isExpanded = !isSuperseded || expandedPlanIds.has(plan.id);
         const toggleExpanded = () =>
           setExpandedPlanIds((current) => toggleSetMember(current, plan.id));
         const isFileListExpanded = expandedFileListIds.has(plan.id);
@@ -739,14 +757,6 @@ export function ModernizationPage(): JSX.Element {
           plan.changes.length <= FILE_LIST_COLLAPSE_THRESHOLD || isFileListExpanded
             ? plan.changes
             : plan.changes.slice(0, FILE_LIST_COLLAPSE_THRESHOLD);
-        // The plan this one refined (if any) and the plan that refined
-        // this one (if any) - both already loaded in `plans` state, so a
-        // real file-level diff needs no extra backend call. See
-        // diffPlanChanges and ModernizationPlan.previous_plan_id.
-        const refinedFromPlan = plan.previous_plan_id
-          ? plans.find((candidate) => candidate.id === plan.previous_plan_id)
-          : undefined;
-        const supersededByPlan = plans.find((candidate) => candidate.previous_plan_id === plan.id);
         return (
           <Card className="repository-intake-card" key={plan.id}>
             <div className="dependency-mapping-heading">
@@ -758,23 +768,21 @@ export function ModernizationPage(): JSX.Element {
               {plan.capability_name ?? "Legacy modernization plan"}
               {plan.target ? `: ${plan.target}` : ""}
             </Text>
-            {!isLatest ? (
+            {supersededByPlan ? (
               <div className="dependency-mapping-heading">
                 <Text size={200} style={{ opacity: 0.72 }}>
-                  {supersededByPlan
-                    ? (() => {
-                        const diff = diffPlanChanges(plan, supersededByPlan);
-                        const parts = [
-                          diff.added.length ? `${diff.added.length} file(s) added` : null,
-                          diff.modified.length ? `${diff.modified.length} modified` : null,
-                          diff.removed.length ? `${diff.removed.length} removed` : null,
-                        ].filter(Boolean);
-                        const diffSummary = parts.length ? parts.join(", ") : "no file changes";
-                        return supersededByPlan.refinement_notes
-                          ? `Refined because: "${supersededByPlan.refinement_notes}" - ${diffSummary}.`
-                          : `Refined into a newer version - ${diffSummary}.`;
-                      })()
-                    : "Superseded by a newer refinement of this plan - kept here for governance history."}
+                  {(() => {
+                    const diff = diffPlanChanges(plan, supersededByPlan);
+                    const parts = [
+                      diff.added.length ? `${diff.added.length} file(s) added` : null,
+                      diff.modified.length ? `${diff.modified.length} modified` : null,
+                      diff.removed.length ? `${diff.removed.length} removed` : null,
+                    ].filter(Boolean);
+                    const diffSummary = parts.length ? parts.join(", ") : "no file changes";
+                    return supersededByPlan.refinement_notes
+                      ? `Refined because: "${supersededByPlan.refinement_notes}" - ${diffSummary}.`
+                      : `Refined into a newer version - ${diffSummary}.`;
+                  })()}
                 </Text>
                 <Button appearance="transparent" size="small" onClick={toggleExpanded}>
                   {isExpanded ? "Hide details" : "Show details"}

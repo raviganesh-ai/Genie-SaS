@@ -811,6 +811,62 @@ describe("ModernizationPage", () => {
     expect(screen.getAllByText(/Your decision is needed/i)).toHaveLength(2);
   });
 
+  it("never labels an older, unrelated plan for a different repository/capability as 'superseded' just because a newer plan exists elsewhere in the session", async () => {
+    // Regression test for a real bug found via live UI testing: a plan is
+    // only a "refinement" of another plan when explicitly linked via
+    // previous_plan_id (the user clicked "Refine this plan"). Two
+    // independent plans for two different repositories/capabilities that
+    // happen to coexist in the same session have no such relationship -
+    // the older one must stay fully expanded, not get mislabeled
+    // "Superseded by a newer refinement of this plan".
+    const nodeDepsPlan = {
+      ...BASE_PLAN,
+      id: "plan-node-deps",
+      repository_full_name: "raviganesh-ai/demo-fake-node-deps",
+      capability_id: "dependency_upgrade",
+      capability_name: "Dependency upgrade or replacement",
+      target: "Replace request/request-promise with axios",
+      summary: "Replace deprecated request and request-promise dependencies with axios.",
+      pull_request_url: "https://github.com/raviganesh-ai/demo-fake-node-deps/pull/2",
+      status: "pull_request_opened",
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const monolithPlan = {
+      ...BASE_PLAN,
+      id: "plan-monolith",
+      repository_full_name: "raviganesh-ai/fake-monolith",
+      capability_id: "monolith_modularization",
+      capability_name: "Monolith to modular",
+      target: null,
+      summary: "Refactor the monolith into a modular monolith with customer/product/order modules.",
+      created_at: "2026-01-02T00:00:00Z",
+    };
+
+    mockFetchSequence([
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+      { match: "/platform-config/reference-repositories", response: [] },
+      // Newest-first, same ordering ModernizationPage relies on elsewhere.
+      { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [monolithPlan, nodeDepsPlan] },
+      { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+    ]);
+
+    renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
+
+    expect(
+      await screen.findByText(
+        "Refactor the monolith into a modular monolith with customer/product/order modules.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("Replace deprecated request and request-promise dependencies with axios."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Superseded by a newer refinement/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/kept here for governance history/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Show details/i })).not.toBeInTheDocument();
+  });
+
   it("shows the inline Approve/Reject decision immediately after generating a plan, without a full page reload", async () => {
     const user = userEvent.setup();
     const binding = {
