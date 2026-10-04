@@ -491,7 +491,11 @@ describe("DeployLaunchPage", () => {
       workflowRunId: FIXTURE_WORKFLOW_RUN_ID,
     });
 
-    const stageHeading = await screen.findByText("Provision Data Layer");
+    // A generous timeout keeps this assertion reliable under CI's
+    // constrained, lower-concurrency test runner (see vite.config.ts's
+    // `forks` pool comment) without masking a genuine regression - the
+    // happy path resolves in well under 1s locally.
+    const stageHeading = await screen.findByText("Provision Data Layer", {}, { timeout: 5000 });
     // Scope the status/detail assertions to this stage's own row - a
     // later, not-yet-reached stage may itself also be optimistically shown
     // as "In Progress..." (the page's pre-existing "next pending step"
