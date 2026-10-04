@@ -66,6 +66,16 @@ class ModernizationPlan(BaseModel):
     # ModernizationService.generate_plan. None means Genie decided the
     # architecture itself.
     architecture_reference_snapshot_id: str | None = None
+    # Set only when this plan was generated via the Refine flow - the plan
+    # it refined, and the free-text feedback that drove the refinement.
+    # Persisted (not just passed transiently to the prompt) so the
+    # frontend can show a real "what changed in this refinement" summary
+    # even after a page reload, instead of only a generic "superseded"
+    # note (real user feedback: the generic note alone was unhelpful
+    # repetition - it needed to say what was actually asked for and what
+    # changed).
+    previous_plan_id: str | None = None
+    refinement_notes: str | None = None
     summary: str
     # Prose rationale for *why* this approach (e.g. modular monolith with a
     # strangler-pattern extraction) was chosen over alternatives - answers

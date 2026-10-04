@@ -301,6 +301,8 @@ class ModernizationService:
             capability_name=capability.name,
             target=target.strip() if target else None,
             architecture_reference_snapshot_id=architecture_reference_snapshot_id,
+            previous_plan_id=previous_plan_id,
+            refinement_notes=cleaned_refinement_notes or None,
             summary=generated.summary,
             rewrite_strategy=generated.rewrite_strategy,
             proposed_components=generated.proposed_components,

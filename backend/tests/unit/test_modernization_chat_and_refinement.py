@@ -244,6 +244,14 @@ async def test_refining_a_plan_passes_the_previous_plan_and_feedback_to_the_agen
 
     assert refined_plan.id != original_plan.id
     assert refined_plan.summary == "Upgraded the runtime, keeping X unchanged."
+    # The refinement linkage and the user's own feedback must be
+    # persisted on the resulting plan (not just passed transiently to the
+    # prompt) so the frontend can show a real "what changed" summary even
+    # after a page reload - see ModernizationPlan.previous_plan_id.
+    assert refined_plan.previous_plan_id == original_plan.id
+    assert refined_plan.refinement_notes == "Keep the existing retry behavior unchanged."
+    assert original_plan.previous_plan_id is None
+    assert original_plan.refinement_notes is None
     # The second call must have actually carried the previous plan's own
     # content and the user's free-text feedback into the prompt, not a
     # silent no-op regeneration.

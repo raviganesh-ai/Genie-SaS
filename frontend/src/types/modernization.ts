@@ -30,6 +30,8 @@ export interface ModernizationPlan {
   capability_name: string | null;
   target: string | null;
   architecture_reference_snapshot_id: string | null;
+  previous_plan_id: string | null;
+  refinement_notes: string | null;
   summary: string;
   rewrite_strategy: string;
   proposed_components: ModernizationProposedComponent[];

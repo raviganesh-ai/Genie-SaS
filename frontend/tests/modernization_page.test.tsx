@@ -625,6 +625,14 @@ describe("ModernizationPage", () => {
       // contain identical text and the collapse assertion couldn't tell
       // which card it actually came from.
       rewrite_strategy: "Keep the existing retry wrapper; only bump the interpreter version.",
+      previous_plan_id: "plan-1",
+      refinement_notes: "Keep the existing retry behavior unchanged.",
+      // Distinct from BASE_PLAN's single README.md change so the diff
+      // against the previous plan has something real to show.
+      changes: [
+        { path: "README.md", content: "Upgraded.", reason: "evidence-backed" },
+        { path: "src/retry/RetryPolicy.java", content: "Unchanged logic.", reason: "Preserved as requested." },
+      ],
     };
 
     const fetchMock = mockFetchSequence([
@@ -659,15 +667,36 @@ describe("ModernizationPage", () => {
     expect(body.previous_plan_id).toBe("plan-1");
     expect(body.refinement_notes).toBe("Keep the existing retry behavior unchanged.");
 
+    // The latest (expanded) plan shows a real "what changed" summary -
+    // the user's own refinement feedback plus a concrete file diff -
+    // instead of requiring the user to mentally compare two full cards.
+    expect(await screen.findByText("What changed in this refinement")).toBeInTheDocument();
+    expect(
+      screen.getByText('Requested: "Keep the existing retry behavior unchanged."'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        (_, element) => element?.textContent === "Added: src/retry/RetryPolicy.java",
+      ).length,
+    ).toBeGreaterThan(0);
+
     // The superseded original plan (BASE_PLAN) collapses by default - its
     // own content must not still be on the page, which is what made the
     // "whole analysis just repeats" (real user feedback).
     expect(
       screen.queryByText("Upgrade in place; no architectural change is required."),
     ).not.toBeInTheDocument();
+    // Real user feedback: the old generic "superseded by a newer
+    // refinement" note was an unhelpful repeat with no actual content -
+    // it's replaced with the same concrete refinement reason and a file
+    // diff summary (one file added here, relative to BASE_PLAN's single
+    // unmodified README.md).
     expect(
-      screen.getByText(/Superseded by a newer refinement of this plan/i),
+      screen.getByText(
+        'Refined because: "Keep the existing retry behavior unchanged." - 1 file(s) added.',
+      ),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/kept here for governance history/i)).not.toBeInTheDocument();
 
     // Real user feedback: collapsing only the analysis content but still
     // showing each plan's own governance decision box looked like

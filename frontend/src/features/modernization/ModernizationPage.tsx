@@ -121,6 +121,41 @@ function rewriteStrategyLabel(capabilityId: string | null): string {
   return (capabilityId ? REWRITE_STRATEGY_LABELS[capabilityId] : undefined) ?? "Strategy rationale";
 }
 
+/** A real file-level diff between a plan and the one it refined (see
+ * ModernizationPlan.previous_plan_id) - computed client-side since both
+ * plans are already loaded in `plans` state, no backend diff endpoint
+ * needed. Real user feedback: a generic "superseded by a newer
+ * refinement" note with no actual content was unhelpful repetition; this
+ * replaces it with concrete, evidenced information about what changed. */
+interface PlanChangeDiff {
+  added: string[];
+  removed: string[];
+  modified: string[];
+  unchangedCount: number;
+}
+
+function diffPlanChanges(previous: ModernizationPlan, next: ModernizationPlan): PlanChangeDiff {
+  const previousByPath = new Map(previous.changes.map((change) => [change.path, change]));
+  const nextByPath = new Map(next.changes.map((change) => [change.path, change]));
+  const added: string[] = [];
+  const modified: string[] = [];
+  for (const [path, change] of nextByPath) {
+    const previousChange = previousByPath.get(path);
+    if (!previousChange) {
+      added.push(path);
+    } else if (previousChange.content !== change.content || previousChange.reason !== change.reason) {
+      modified.push(path);
+    }
+  }
+  const removed = [...previousByPath.keys()].filter((path) => !nextByPath.has(path));
+  return {
+    added,
+    removed,
+    modified,
+    unchangedCount: next.changes.length - added.length - modified.length,
+  };
+}
+
 /** The Build Agent sometimes writes its own "1. ", "2) " etc. prefix
  * directly into a deployment_plan step's text. Rendered inside an <ol>
  * (which numbers every <li> itself), that produced a real, confusing
@@ -663,6 +698,14 @@ export function ModernizationPage(): JSX.Element {
           plan.changes.length <= FILE_LIST_COLLAPSE_THRESHOLD || isFileListExpanded
             ? plan.changes
             : plan.changes.slice(0, FILE_LIST_COLLAPSE_THRESHOLD);
+        // The plan this one refined (if any) and the plan that refined
+        // this one (if any) - both already loaded in `plans` state, so a
+        // real file-level diff needs no extra backend call. See
+        // diffPlanChanges and ModernizationPlan.previous_plan_id.
+        const refinedFromPlan = plan.previous_plan_id
+          ? plans.find((candidate) => candidate.id === plan.previous_plan_id)
+          : undefined;
+        const supersededByPlan = plans.find((candidate) => candidate.previous_plan_id === plan.id);
         return (
           <Card className="repository-intake-card" key={plan.id}>
             <div className="dependency-mapping-heading">
@@ -677,7 +720,20 @@ export function ModernizationPage(): JSX.Element {
             {!isLatest ? (
               <div className="dependency-mapping-heading">
                 <Text size={200} style={{ opacity: 0.72 }}>
-                  Superseded by a newer refinement of this plan - kept here for governance history.
+                  {supersededByPlan
+                    ? (() => {
+                        const diff = diffPlanChanges(plan, supersededByPlan);
+                        const parts = [
+                          diff.added.length ? `${diff.added.length} file(s) added` : null,
+                          diff.modified.length ? `${diff.modified.length} modified` : null,
+                          diff.removed.length ? `${diff.removed.length} removed` : null,
+                        ].filter(Boolean);
+                        const diffSummary = parts.length ? parts.join(", ") : "no file changes";
+                        return supersededByPlan.refinement_notes
+                          ? `Refined because: "${supersededByPlan.refinement_notes}" - ${diffSummary}.`
+                          : `Refined into a newer version - ${diffSummary}.`;
+                      })()
+                    : "Superseded by a newer refinement of this plan - kept here for governance history."}
                 </Text>
                 <Button appearance="transparent" size="small" onClick={toggleExpanded}>
                   {isExpanded ? "Hide details" : "Show details"}
@@ -686,6 +742,43 @@ export function ModernizationPage(): JSX.Element {
             ) : null}
             {isExpanded ? (
               <>
+                {refinedFromPlan ? (
+                  <div className="modernization-cost">
+                    <Text weight="semibold">What changed in this refinement</Text>
+                    {plan.refinement_notes ? (
+                      <Text block size={300}>Requested: &quot;{plan.refinement_notes}&quot;</Text>
+                    ) : null}
+                    {(() => {
+                      const diff = diffPlanChanges(refinedFromPlan, plan);
+                      if (!diff.added.length && !diff.modified.length && !diff.removed.length) {
+                        return (
+                          <Text size={200} style={{ opacity: 0.72 }}>
+                            No file changes relative to the previous version.
+                          </Text>
+                        );
+                      }
+                      return (
+                        <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                          {diff.added.map((path) => (
+                            <li key={`added-${path}`}>
+                              <Text size={200}><strong>Added:</strong> {path}</Text>
+                            </li>
+                          ))}
+                          {diff.modified.map((path) => (
+                            <li key={`modified-${path}`}>
+                              <Text size={200}><strong>Modified:</strong> {path}</Text>
+                            </li>
+                          ))}
+                          {diff.removed.map((path) => (
+                            <li key={`removed-${path}`}>
+                              <Text size={200}><strong>Removed:</strong> {path}</Text>
+                            </li>
+                          ))}
+                        </ul>
+                      );
+                    })()}
+                  </div>
+                ) : null}
                 {plan.rewrite_strategy ? (
                   <div>
                     <Text weight="semibold">{rewriteStrategyLabel(plan.capability_id)}</Text>
