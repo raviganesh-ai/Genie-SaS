@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="880" viewBox="0 0 1600 880" role="img" aria-labelledby="title description">
+  <title id="title">Genie Modernize &amp; Deliver pipeline</title>
+  <desc id="description">Flow diagram showing a bound GitHub repository read through a live dependency assessment, one of six modernization capabilities selected, an Azure AI Foundry-generated governed plan, a human governance approval gate, real branch/commit/draft pull request execution, and the capability-specific outcome after the pull request opens.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#36566F" flood-opacity="0.16"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#0078D4"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#107C10"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#5C2D91"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1600" height="880" fill="#FFFFFF"/>
+
+  <!-- Stage 1: bound repository -->
+  <g>
+    <rect x="40" y="60" width="260" height="110" rx="8" fill="#FFFFFF" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="40" y="60" width="6" height="110" rx="3" fill="#0078D4"/>
+    <text x="70" y="98" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">GitHub repository</text>
+    <text x="70" y="120" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">Bound via repository-purpose</text>
+    <text x="70" y="138" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">binding, pinned to a commit</text>
+    <text x="70" y="156" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">(demo-fake-py3.9, fake-monolith, ...)</text>
+  </g>
+
+  <!-- Stage 2: dependency assessment -->
+  <g>
+    <rect x="340" y="60" width="260" height="110" rx="8" fill="#EAF8F6" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="340" y="60" width="6" height="110" rx="3" fill="#008575"/>
+    <text x="370" y="98" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Dependency assessment</text>
+    <text x="370" y="120" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">Live file-by-file read from</text>
+    <text x="370" y="138" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">GitHub; auto re-runs whenever</text>
+    <text x="370" y="156" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">the active binding changes</text>
+  </g>
+  <line x1="300" y1="115" x2="338" y2="115" stroke="#0078D4" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 3: capability selection -->
+  <g>
+    <rect x="640" y="30" width="300" height="170" rx="8" fill="#FFFFFF" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="640" y="30" width="6" height="170" rx="3" fill="#5C2D91"/>
+    <text x="670" y="60" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Modernization capability</text>
+    <text x="670" y="82" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">(exactly one per plan)</text>
+    <text x="670" y="104" font-family="Segoe UI, sans-serif" font-size="13" fill="#172B3A">1. Language or runtime upgrade</text>
+    <text x="670" y="124" font-family="Segoe UI, sans-serif" font-size="13" fill="#172B3A">2. Framework upgrade</text>
+    <text x="670" y="144" font-family="Segoe UI, sans-serif" font-size="13" fill="#172B3A">3. Dependency upgrade/replacement</text>
+    <text x="670" y="164" font-family="Segoe UI, sans-serif" font-size="13" fill="#172B3A">4. Modernization strategy recommendation</text>
+    <text x="670" y="184" font-family="Segoe UI, sans-serif" font-size="13" fill="#172B3A">5. Rehost to Azure   6. Monolith to modular</text>
+  </g>
+  <line x1="600" y1="115" x2="638" y2="115" stroke="#0078D4" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 4: Foundry plan generation -->
+  <g>
+    <rect x="980" y="60" width="290" height="110" rx="8" fill="#EFF6FC" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="980" y="60" width="6" height="110" rx="3" fill="#0078D4"/>
+    <text x="1010" y="98" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Azure AI Foundry plan</text>
+    <text x="1010" y="120" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">AzureAgentGateway generates a</text>
+    <text x="1010" y="138" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">rewrite strategy, file-level</text>
+    <text x="1010" y="156" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">changes, risks, and a cost estimate</text>
+  </g>
+  <line x1="940" y1="115" x2="978" y2="115" stroke="#0078D4" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Refine loop -->
+  <path d="M 1125 170 C 1125 220 900 220 900 170" fill="none" stroke="#5C2D91" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrowPurple)"/>
+  <text x="900" y="240" font-family="Segoe UI, sans-serif" font-size="12" fill="#5C2D91">Ask / Refine (free-text feedback regenerates a linked, diffable plan)</text>
+
+  <!-- Stage 5: governance approval -->
+  <g>
+    <rect x="640" y="300" width="300" height="110" rx="8" fill="#FFF4ED" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="640" y="300" width="6" height="110" rx="3" fill="#D83B01"/>
+    <text x="670" y="338" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Governance approval</text>
+    <text x="670" y="360" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">Human Approve/Reject recorded as</text>
+    <text x="670" y="378" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">a real ApprovalRequest/Decision -</text>
+    <text x="670" y="396" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">Execute stays disabled until approved</text>
+  </g>
+  <line x1="1125" y1="170" x2="790" y2="298" stroke="#0078D4" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 6: execute -->
+  <g>
+    <rect x="980" y="300" width="290" height="110" rx="8" fill="#F1FAF1" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="980" y="300" width="6" height="110" rx="3" fill="#107C10"/>
+    <text x="1010" y="338" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Execute</text>
+    <text x="1010" y="360" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">Creates a dedicated branch, pushes</text>
+    <text x="1010" y="378" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">every planned file change, and opens</text>
+    <text x="1010" y="396" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">a draft pull request via GitHub MCP</text>
+  </g>
+  <line x1="940" y1="355" x2="978" y2="355" stroke="#0078D4" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 7: capability-specific outcome fan-out -->
+  <text x="800" y="500" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" font-weight="600" fill="#172B3A">What happens after the draft pull request opens - by capability</text>
+  <line x1="1125" y1="410" x2="1125" y2="440" stroke="#107C10" stroke-width="2"/>
+  <line x1="300" y1="440" x2="1125" y2="440" stroke="#107C10" stroke-width="2"/>
+  <line x1="300" y1="440" x2="300" y2="478" stroke="#107C10" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="712" y1="440" x2="712" y2="478" stroke="#107C10" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="1125" y1="440" x2="1125" y2="478" stroke="#107C10" stroke-width="2" marker-end="url(#arrowGreen)"/>
+
+  <g>
+    <rect x="40" y="540" width="520" height="130" rx="8" fill="#FFFFFF" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="40" y="540" width="6" height="130" rx="3" fill="#0078D4"/>
+    <text x="70" y="578" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Runtime, framework, dependency,</text>
+    <text x="70" y="598" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">strategy recommendation</text>
+    <text x="70" y="624" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">No hosting changes - review and merge the</text>
+    <text x="70" y="642" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">draft PR through your normal process. Strategy</text>
+    <text x="70" y="660" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">recommendation is advisory-only (a report, no code).</text>
+  </g>
+
+  <g>
+    <rect x="596" y="540" width="232" height="130" rx="8" fill="#FFFFFF" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="596" y="540" width="6" height="130" rx="3" fill="#5C2D91"/>
+    <text x="626" y="578" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Monolith to modular</text>
+    <text x="626" y="604" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">A local, client-only 6-step</text>
+    <text x="626" y="622" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">rollout walkthrough checklist -</text>
+    <text x="626" y="640" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">tracks progress only, performs</text>
+    <text x="626" y="658" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">no additional backend action</text>
+  </g>
+
+  <g>
+    <rect x="962" y="540" width="326" height="130" rx="8" fill="#FFFFFF" stroke="#B4C7D9" filter="url(#shadow)"/>
+    <rect x="962" y="540" width="6" height="130" rx="3" fill="#107C10"/>
+    <text x="992" y="578" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#172B3A">Rehost to Azure</text>
+    <text x="992" y="604" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">The only capability with a real follow-on</text>
+    <text x="992" y="622" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">deployment UI: propose -&gt; approve -&gt; a real,</text>
+    <text x="992" y="640" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">governed Azure Container Apps deployment,</text>
+    <text x="992" y="658" font-family="Segoe UI, sans-serif" font-size="13" fill="#526575">tracked with its own evidence/decision record</text>
+  </g>
+
+  <text x="800" y="840" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" fill="#526575">Every step above is a real, deterministic call against GitHub and Azure AI Foundry - never a simulated or narrated result.</text>
+</svg>

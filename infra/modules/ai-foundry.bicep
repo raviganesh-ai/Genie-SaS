@@ -23,6 +23,9 @@ param projectName string
 param managedIdentityPrincipalId string
 param tags object
 
+@description('Model deployments created on the Foundry account as part of this same Bicep deployment (e.g. the default LLM referenced by config/agents/registry.yaml). Each entry must use a model/version/SKU actually available in `location` for this subscription - deploying an unavailable combination fails this template with the exact Azure error, never a silent fallback.')
+param modelDeployments array = []
+
 // Built-in role definition id for "Cognitive Services User" - lets the
 // managed identity invoke the account's models/agents without granting
 // control-plane (account management) permissions.
@@ -46,6 +49,30 @@ resource foundryAccount 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
     allowProjectManagement: true
   }
 }
+
+// Model deployments must be created one at a time against the same
+// account resource (Azure rejects concurrent deployment writes), so this
+// loop declares an explicit dependsOn against the previous iteration's
+// resource via Bicep's `@batchSize(1)` decorator rather than relying on
+// implicit parallel resource-group provisioning.
+@batchSize(1)
+resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = [
+  for deployment in modelDeployments: {
+    parent: foundryAccount
+    name: deployment.name
+    sku: {
+      name: deployment.?skuName ?? 'GlobalStandard'
+      capacity: deployment.?skuCapacity ?? 10
+    }
+    properties: {
+      model: {
+        format: deployment.?format ?? 'OpenAI'
+        name: deployment.model
+        version: deployment.version
+      }
+    }
+  }
+]
 
 resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   parent: foundryAccount
@@ -74,3 +101,4 @@ resource cognitiveServicesUserRoleAssignment 'Microsoft.Authorization/roleAssign
 output endpoint string = foundryAccount.properties.endpoint
 output accountName string = foundryAccount.name
 output projectName string = foundryProject.name
+

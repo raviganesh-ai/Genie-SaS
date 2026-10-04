@@ -10,6 +10,16 @@ param virtualNetworkAddressPrefix string
 param containerAppsInfrastructureSubnetPrefix string
 param privateEndpointSubnetPrefix string
 param apiManagementSubnetPrefix string
+@description('Model deployments to create on the Foundry account - see ai-foundry.bicep.')
+param foundryModelDeployments array = []
+@description('Deploy the Azure Container Registry and a bootstrap backend Container App as part of this same template (recommended for a first deployment into an empty subscription). Set to false to reuse an existing registry/app instead.')
+param deployContainerRegistryAndBackendApp bool = true
+@allowed([
+  'Basic'
+  'Standard'
+  'Premium'
+])
+param containerRegistrySkuName string = 'Basic'
 param tags object
 
 // Built-in role definition ids - granted to Genie's own runtime managed
@@ -128,6 +138,7 @@ module aiFoundry 'ai-foundry.bicep' = {
     accountName: '${resourcePrefix}-${resourceToken}-foundry'
     projectName: '${resourcePrefix}-${resourceToken}-project'
     managedIdentityPrincipalId: managedIdentity.outputs.principalId
+    modelDeployments: foundryModelDeployments
     tags: tags
   }
 }
@@ -167,14 +178,58 @@ module staticWebApp 'static-web-app.bicep' = {
   }
 }
 
+module containerRegistry 'container-registry.bicep' = if (deployContainerRegistryAndBackendApp) {
+  name: 'genie-container-registry'
+  params: {
+    location: location
+    // ACR names must be globally unique, 5-50 chars, alphanumeric only.
+    name: take(toLower('${resourcePrefix}acr${resourceToken}'), 50)
+    managedIdentityPrincipalId: managedIdentity.outputs.principalId
+    skuName: containerRegistrySkuName
+    tags: tags
+  }
+}
+
+module backendContainerApp 'backend-container-app.bicep' = if (deployContainerRegistryAndBackendApp) {
+  name: 'genie-backend-container-app'
+  params: {
+    location: location
+    name: '${resourcePrefix}-${resourceToken}-backend'
+    containerAppsEnvironmentId: containerAppsEnvironment.outputs.id
+    // Non-null assertion (not #disable-next-line, which only applies to
+    // linter rules, not this BCP318 compiler diagnostic): both modules
+    // share the exact same `deployContainerRegistryAndBackendApp` guard,
+    // so containerRegistry is always created whenever this module is.
+    containerRegistryLoginServer: deployContainerRegistryAndBackendApp ? containerRegistry!.outputs.loginServer : ''
+    managedIdentityResourceId: managedIdentity.outputs.resourceId
+    managedIdentityClientId: managedIdentity.outputs.clientId
+    tags: tags
+  }
+}
+
 output managedIdentityPrincipalId string = managedIdentity.outputs.principalId
 output managedIdentityClientId string = managedIdentity.outputs.clientId
+output managedIdentityResourceId string = managedIdentity.outputs.resourceId
 output keyVaultUri string = keyVault.outputs.vaultUri
+output keyVaultName string = keyVault.outputs.vaultName
 output storageAccountName string = storageAccount.outputs.name
 output aiSearchEndpoint string = aiSearch.outputs.endpoint
 output cosmosDbEndpoint string = cosmosDb.outputs.endpoint
 output aiFoundryEndpoint string = aiFoundry.outputs.endpoint
+output aiFoundryAccountName string = aiFoundry.outputs.accountName
+output aiFoundryProjectName string = aiFoundry.outputs.projectName
 output containerAppsEnvironmentId string = containerAppsEnvironment.outputs.id
+output containerAppsEnvironmentName string = containerAppsEnvironment.outputs.name
 output staticWebAppDefaultHostname string = staticWebApp.outputs.defaultHostname
+output staticWebAppName string = staticWebApp.outputs.name
 output applicationInsightsConnectionString string = appInsights.outputs.connectionString
 output logAnalyticsWorkspaceId string = logAnalytics.outputs.workspaceId
+// Non-null assertion: each output expression re-checks the exact same
+// `deployContainerRegistryAndBackendApp` guard the module was created under.
+output containerRegistryName string = deployContainerRegistryAndBackendApp ? containerRegistry!.outputs.name : ''
+output containerRegistryLoginServer string = deployContainerRegistryAndBackendApp ? containerRegistry!.outputs.loginServer : ''
+output backendContainerAppName string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.name : ''
+output backendContainerAppFqdn string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.fqdn : ''
+
+
+

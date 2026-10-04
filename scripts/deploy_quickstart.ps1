@@ -1,0 +1,452 @@
+<#
+.SYNOPSIS
+    One-command deployment of a complete Genie evaluation environment into
+    ANY Azure subscription you own - never the original author's.
+
+.DESCRIPTION
+    Chains every already-existing, individually-tested Genie deployment
+    script/Bicep template, in the right order, into a single run:
+
+      1. Confirms (and lets you switch) the signed-in `az` identity -
+         never assumes a specific tenant/subscription/account.
+      2. Prompts for every subscription id, region, publisher contact,
+         GitHub token, and model choice this deployment needs - nothing is
+         pre-filled with a real value belonging to any specific
+         organization, and no credential is ever written to a file this
+         repository tracks or printed back out after it's collected.
+      3. Validates Azure resource-provider readiness (fails closed).
+      4. Deploys infra/main.bicep - creates its own resource group and
+         EVERY foundational resource Genie needs, including (new) an
+         Azure Container Registry and a bootstrap backend Container App,
+         so an empty subscription ends up with a real, addressable
+         Container App resource.
+      5. Builds and pushes the real FastAPI image, then rolls it onto
+         that Container App via the existing scripts/deploy_backend.ps1.
+      6. Provisions the dedicated APIM gateway via
+         scripts/deploy_platform_gateway.ps1.
+      7. Provisions every Genie agent as a real Azure AI Foundry resource
+         via scripts/provision_foundry_agents.py.
+      8. Builds and deploys the frontend to the Static Web App Bicep
+         already created.
+      9. Runs the same health checks documented in README.md.
+
+    This script is intentionally LONG-RUNNING (Azure API Management
+    Standard v2 provisioning alone commonly takes 30-45 minutes) and
+    intentionally STOPS at the first failure (fail closed) rather than
+    attempting a partial/best-effort deployment - re-run it; every stage
+    is either already idempotent (the scripts it calls) or safe to retry.
+
+    Per the Purpose and use boundary in README.md: this reproduces
+    Genie's ART-OF-THE-POSSIBLE EVALUATION environment, not a
+    production-ready deployment. Complete your own security/privacy/
+    operational-readiness review before any production use.
+
+    PREREQUISITE: the signed-in account needs Contributor-equivalent
+    rights on the target subscription (the default for the Owner of a
+    brand-new subscription). For a least-privilege alternative instead of
+    Contributor, see "Create a least-privilege deployment identity" in
+    docs/DEPLOYMENT.md and run scripts/create_deployment_identity.ps1
+    first.
+
+.PARAMETER SubscriptionId
+    Azure subscription id to deploy into. If omitted, you're prompted to
+    pick from `az account list` (your own signed-in account's own
+    subscriptions - never a default baked into this script).
+
+.PARAMETER EnvironmentName
+    Short, unique name for this environment (e.g. "dev"). Default: "dev".
+
+.PARAMETER Location
+    Azure region for every resource. Default: "eastus2" - confirm Azure AI
+    Foundry/model availability in your chosen region before accepting.
+
+.PARAMETER ResourcePrefix
+    Short prefix applied to every resource name. Default: "genie".
+
+.PARAMETER SkipFrontendDeploy
+    Skip the final frontend build/deploy stage (useful when iterating on
+    backend-only stages during testing).
+
+.EXAMPLE
+    ./scripts/deploy_quickstart.ps1
+    (fully interactive - prompts for everything required)
+
+.EXAMPLE
+    ./scripts/deploy_quickstart.ps1 -SubscriptionId <your-subscription-id> -EnvironmentName dev -Location eastus2
+#>
+[CmdletBinding()]
+param(
+    [string]$SubscriptionId,
+    [string]$EnvironmentName = "dev",
+    [string]$Location = "eastus2",
+    [string]$ResourcePrefix = "genie",
+    [switch]$SkipFrontendDeploy
+)
+
+$ErrorActionPreference = "Stop"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+
+function Write-Stage {
+    param([string]$Text)
+    Write-Host "`n=== $Text ===" -ForegroundColor Cyan
+}
+
+function Read-RequiredValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Prompt,
+        [string]$Default
+    )
+    $suffix = if ($Default) { " [$Default]" } else { "" }
+    while ($true) {
+        $value = Read-Host "$Prompt$suffix"
+        if ([string]::IsNullOrWhiteSpace($value) -and $Default) { return $Default }
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+        Write-Host "A value is required." -ForegroundColor Yellow
+    }
+}
+
+function Read-SecretValue {
+    param([Parameter(Mandatory = $true)][string]$Prompt)
+    $secure = Read-Host $Prompt -AsSecureString
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+function Invoke-AzJson {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    $output = & az @Arguments --only-show-errors -o json
+    if ($LASTEXITCODE -ne 0) {
+        throw "Azure CLI command failed: az $($Arguments -join ' ')"
+    }
+    return $output | ConvertFrom-Json -Depth 100
+}
+
+Write-Host @"
+Genie - one-command deploy into YOUR Azure subscription
+=========================================================
+This provisions a complete, isolated Genie evaluation environment. It never
+reads or writes any credential, subscription id, or secret belonging to the
+original authoring environment - every value below comes from you, right now.
+
+Genie is an art-of-the-possible evaluation prototype, not a production-ready
+deployment - see "Purpose and use boundary" in README.md.
+"@ -ForegroundColor White
+
+if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+    Write-Error "Azure CLI ('az') was not found on PATH. Install it from https://learn.microsoft.com/cli/azure/install-azure-cli and re-run this script."
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Stage 0: identity - confirm (or establish) YOUR OWN signed-in az session.
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 0/9: confirm your Azure identity"
+$account = $null
+try { $account = Invoke-AzJson account show } catch { $account = $null }
+if (-not $account) {
+    Write-Host "Not signed in to Azure CLI - opening an interactive 'az login'..." -ForegroundColor Yellow
+    az login | Out-Null
+    $account = Invoke-AzJson account show
+}
+Write-Host "Signed in as: $($account.user.name)" -ForegroundColor Green
+Write-Host "Active subscription: $($account.name) ($($account.id))"
+$switchAccount = Read-Host "Use a different Azure account/subscription? (y/N)"
+if ($switchAccount -match '^(y|yes)$') {
+    az login | Out-Null
+    $account = Invoke-AzJson account show
+}
+
+if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
+    $subscriptions = Invoke-AzJson account list
+    if ($subscriptions.Count -gt 1) {
+        Write-Host "`nAvailable subscriptions for this account:"
+        for ($i = 0; $i -lt $subscriptions.Count; $i++) {
+            Write-Host "  [$i] $($subscriptions[$i].name) ($($subscriptions[$i].id))"
+        }
+        $index = Read-RequiredValue -Prompt "Pick a subscription by index" -Default "0"
+        $SubscriptionId = $subscriptions[[int]$index].id
+    }
+    else {
+        $SubscriptionId = $account.id
+    }
+}
+az account set --subscription $SubscriptionId | Out-Null
+Write-Host "Deploying into subscription: $SubscriptionId" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# Stage 1: collect every other required value interactively.
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 1/9: collect deployment parameters"
+$EnvironmentName = Read-RequiredValue -Prompt "Environment name" -Default $EnvironmentName
+$Location = Read-RequiredValue -Prompt "Azure region" -Default $Location
+$ResourcePrefix = Read-RequiredValue -Prompt "Resource name prefix" -Default $ResourcePrefix
+
+Write-Host "`nGenie's backend connects to GitHub repositories through a GitHub MCP" -ForegroundColor White
+Write-Host "server using a token YOU provide - never a token belonging to anyone else." -ForegroundColor White
+Write-Host "Create a fine-grained Personal Access Token at https://github.com/settings/tokens" -ForegroundColor White
+Write-Host "(read-only repo scopes are enough unless you plan to test branch/PR creation)." -ForegroundColor White
+$githubMcpToken = Read-SecretValue -Prompt "GitHub Personal Access Token"
+$githubMcpEndpoint = Read-RequiredValue -Prompt "GitHub MCP endpoint" -Default "https://api.githubcopilot.com/mcp/"
+
+Write-Host "`nAzure API Management requires a publisher contact - this is shown on" -ForegroundColor White
+Write-Host "developer-portal/error pages, never used for anything else." -ForegroundColor White
+$publisherEmail = Read-RequiredValue -Prompt "APIM publisher email"
+$publisherName = Read-RequiredValue -Prompt "APIM publisher display name" -Default "Genie"
+
+$deployModel = Read-Host "Deploy a default LLM to Azure AI Foundry as part of this run? (Y/n)"
+$modelDeployments = @()
+$defaultLlmDeploymentName = $null
+if (-not ($deployModel -match '^(n|no)$')) {
+    $defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default "gpt-5-mini"
+    $defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default "gpt-5-mini"
+    $defaultLlmVersion = Read-RequiredValue -Prompt "Model version (check 'az cognitiveservices model list --location $Location' if unsure)"
+    $modelDeployments = @(
+        @{ name = $defaultLlmDeploymentName; model = $defaultLlmModel; version = $defaultLlmVersion }
+    )
+}
+else {
+    Write-Host "Skipping automatic model deployment - deploy one manually afterward (see docs/DEPLOYMENT.md) and set GENIE_DEFAULT_LLM to match." -ForegroundColor Yellow
+}
+
+# ---------------------------------------------------------------------------
+# Stage 2: deployment readiness validation (fail closed).
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 2/9: deployment readiness validation"
+$pythonExe = Join-Path $repoRoot "backend\.venv\Scripts\python.exe"
+if (-not (Test-Path $pythonExe)) {
+    Write-Host "Creating backend virtual environment (first run only)..." -ForegroundColor Yellow
+    Push-Location (Join-Path $repoRoot "backend")
+    try {
+        python -m venv .venv
+        & .venv\Scripts\python.exe -m pip install --quiet --upgrade pip
+        & .venv\Scripts\python.exe -m pip install --quiet -e ".[dev]"
+    }
+    finally {
+        Pop-Location
+    }
+}
+$env:GENIE_DEPLOY_SUBSCRIPTION_ID = $SubscriptionId
+Push-Location $repoRoot
+try {
+    & $pythonExe "scripts/validate_deployment_readiness.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Deployment readiness check failed (exit code $LASTEXITCODE). Register the missing resource provider(s) it lists, then re-run this script."
+    }
+}
+finally {
+    Pop-Location
+}
+
+# ---------------------------------------------------------------------------
+# Stage 3: provision infrastructure (infra/main.bicep).
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 3/9: provisioning infrastructure (this can take 10-20 minutes)"
+$deploymentName = "genie-$EnvironmentName-$(Get-Date -Format 'yyyyMMddHHmmss')"
+# Array-typed Bicep parameters (foundryModelDeployments) are passed via a
+# generated ARM parameters file rather than an inline `name=value` CLI
+# argument - deliberately avoids any risk of PowerShell/Azure CLI shell
+# quoting mangling embedded JSON quotes/brackets.
+$overlayParamsFile = Join-Path ([System.IO.Path]::GetTempPath()) "genie-quickstart-params-$([guid]::NewGuid().ToString('N')).json"
+$armParameters = @{
+    '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
+    contentVersion = '1.0.0.0'
+    parameters     = @{
+        environmentName         = @{ value = $EnvironmentName }
+        location                = @{ value = $Location }
+        resourcePrefix           = @{ value = $ResourcePrefix }
+        foundryModelDeployments  = @{ value = $modelDeployments }
+    }
+}
+try {
+    $armParameters | ConvertTo-Json -Depth 10 | Set-Content -Path $overlayParamsFile -Encoding utf8
+    az deployment sub create `
+        --name $deploymentName `
+        --location $Location `
+        --subscription $SubscriptionId `
+        --template-file (Join-Path $repoRoot "infra\main.bicep") `
+        --parameters "@$overlayParamsFile" `
+        --only-show-errors -o none
+    if ($LASTEXITCODE -ne 0) {
+        throw "Infrastructure deployment failed."
+    }
+}
+finally {
+    if (Test-Path $overlayParamsFile) { Remove-Item -Path $overlayParamsFile -Force }
+}
+$outputs = (Invoke-AzJson deployment sub show --name $deploymentName --subscription $SubscriptionId).properties.outputs
+$resourceGroup = $outputs.resourceGroupName.value
+$containerAppName = $outputs.backendContainerAppName.value
+$containerRegistryName = $outputs.containerRegistryName.value
+$acrLoginServer = $outputs.containerRegistryLoginServer.value
+$cosmosDbEndpoint = $outputs.cosmosDbEndpoint.value
+$aiFoundryEndpoint = $outputs.aiFoundryEndpoint.value
+$aiFoundryProjectName = $outputs.aiFoundryProjectName.value
+$keyVaultUri = $outputs.keyVaultUri.value
+$staticWebAppHostname = $outputs.staticWebAppDefaultHostname.value
+$staticWebAppName = $outputs.staticWebAppName.value
+$allowedOrigin = "https://$staticWebAppHostname"
+Write-Host "Resource group: $resourceGroup" -ForegroundColor Green
+
+if ([string]::IsNullOrWhiteSpace($containerAppName) -or [string]::IsNullOrWhiteSpace($containerRegistryName)) {
+    throw "infra/main.bicep did not produce a backend Container App/Container Registry - pass deployContainerRegistryAndBackendApp=true or provision them yourself before continuing."
+}
+
+# ---------------------------------------------------------------------------
+# Stage 4: build and push the real backend image.
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 4/9: building and pushing the backend image"
+$imageTag = (git -C $repoRoot rev-parse --short HEAD 2>$null)
+if ([string]::IsNullOrWhiteSpace($imageTag)) { $imageTag = Get-Date -Format "yyyyMMddHHmmss" }
+$backendImage = "$acrLoginServer/genie-backend:$imageTag"
+az acr build `
+    --subscription $SubscriptionId `
+    --registry $containerRegistryName `
+    --image "genie-backend:$imageTag" `
+    --file (Join-Path $repoRoot "backend\Dockerfile") `
+    $repoRoot `
+    --only-show-errors
+if ($LASTEXITCODE -ne 0) {
+    throw "Backend image build failed."
+}
+
+# ---------------------------------------------------------------------------
+# Stage 5: provision the dedicated API Management gateway.
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 5/9: provisioning the API Management gateway (first run commonly takes 30-45 minutes)"
+$gateway = & (Join-Path $repoRoot "scripts\deploy_platform_gateway.ps1") `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroup $resourceGroup `
+    -ContainerAppName $containerAppName `
+    -AllowedOrigin $allowedOrigin `
+    -PublisherEmail $publisherEmail `
+    -PublisherName $publisherName | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    throw "Platform gateway deployment failed."
+}
+$gatewayUrl = $gateway.gatewayUrl
+Write-Host "Gateway URL: $gatewayUrl" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# Stage 6: store the GitHub MCP token and roll out the real backend image.
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 6/9: configuring and rolling out the real backend"
+az containerapp secret set `
+    --subscription $SubscriptionId `
+    --resource-group $resourceGroup `
+    --name $containerAppName `
+    --secrets "github-mcp-token=$githubMcpToken" `
+    --only-show-errors -o none
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to store the GitHub MCP token on the Container App."
+}
+Remove-Variable githubMcpToken -ErrorAction SilentlyContinue
+
+az containerapp update `
+    --subscription $SubscriptionId `
+    --resource-group $resourceGroup `
+    --name $containerAppName `
+    --set-env-vars "GENIE_KEY_VAULT_URI=$keyVaultUri" `
+    --only-show-errors -o none | Out-Null
+
+if ($defaultLlmDeploymentName) {
+    # Only needed when it differs from Settings.DEFAULT_LLM's own
+    # built-in default ("gpt-5-mini") - setting it unconditionally
+    # whenever a deployment name was chosen keeps this correct either way.
+    az containerapp update `
+        --subscription $SubscriptionId `
+        --resource-group $resourceGroup `
+        --name $containerAppName `
+        --set-env-vars "GENIE_DEFAULT_LLM=$defaultLlmDeploymentName" `
+        --only-show-errors -o none | Out-Null
+}
+
+$revisionSuffix = ("q" + (Get-Date -Format "MMddHHmm"))
+& (Join-Path $repoRoot "scripts\deploy_backend.ps1") `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroup $resourceGroup `
+    -ContainerAppName $containerAppName `
+    -BackendImage $backendImage `
+    -AllowedOrigin $allowedOrigin `
+    -GatewayUrl $gatewayUrl `
+    -MemoryStoreEndpoint $cosmosDbEndpoint `
+    -GitHubMcpEndpoint $githubMcpEndpoint `
+    -GitHubMcpTokenSecretName "github-mcp-token" `
+    -PrototypeApiGatewayPublisherEmail $publisherEmail `
+    -PrototypeApiGatewayPublisherName $publisherName `
+    -PrototypeMaxActivePerOwner 0 `
+    -RevisionSuffix $revisionSuffix
+if ($LASTEXITCODE -ne 0) {
+    throw "Backend rollout failed."
+}
+
+# ---------------------------------------------------------------------------
+# Stage 7: provision every Genie agent as a real Azure AI Foundry resource.
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 7/9: provisioning Azure AI Foundry agents"
+$env:GENIE_AZURE_FOUNDRY_ENDPOINT = $aiFoundryEndpoint
+$env:GENIE_AZURE_FOUNDRY_PROJECT_NAME = $aiFoundryProjectName
+Push-Location $repoRoot
+try {
+    & $pythonExe "scripts/provision_foundry_agents.py" --endpoint $aiFoundryEndpoint --project $aiFoundryProjectName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Agent provisioning reported a failure - re-run 'python scripts/provision_foundry_agents.py' after resolving it; later stages will still run." -ForegroundColor Yellow
+    }
+    & $pythonExe "scripts/validate_foundry_agents.py"
+}
+finally {
+    Pop-Location
+}
+
+# ---------------------------------------------------------------------------
+# Stage 8: build and deploy the frontend.
+# ---------------------------------------------------------------------------
+if (-not $SkipFrontendDeploy) {
+    Write-Stage "Stage 8/9: building and deploying the frontend"
+    Push-Location (Join-Path $repoRoot "frontend")
+    try {
+        $env:VITE_GENIE_API_BASE_URL = $gatewayUrl
+        npm ci
+        npm run build
+        if ($LASTEXITCODE -ne 0) { throw "Frontend build failed." }
+        $swaToken = az staticwebapp secrets list `
+            --subscription $SubscriptionId `
+            --resource-group $resourceGroup `
+            --name $staticWebAppName `
+            --query properties.apiKey -o tsv --only-show-errors
+        npx --yes @azure/static-web-apps-cli@latest deploy dist --deployment-token $swaToken --env production
+        if ($LASTEXITCODE -ne 0) { throw "Frontend deploy failed." }
+    }
+    finally {
+        Remove-Item Env:\VITE_GENIE_API_BASE_URL -ErrorAction SilentlyContinue
+        Pop-Location
+    }
+}
+else {
+    Write-Stage "Stage 8/9: skipped (-SkipFrontendDeploy)"
+}
+
+# ---------------------------------------------------------------------------
+# Stage 9: health checks + summary.
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 9/9: verifying health"
+try {
+    $live = Invoke-WebRequest -Uri "$gatewayUrl/health/live" -UseBasicParsing -TimeoutSec 30
+    $ready = Invoke-WebRequest -Uri "$gatewayUrl/health/ready" -UseBasicParsing -TimeoutSec 30
+    Write-Host "health/live: $($live.StatusCode)   health/ready: $($ready.StatusCode)" -ForegroundColor Green
+}
+catch {
+    Write-Host "Health check call failed - the gateway/backend may still be warming up: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+Write-Host "`n=== Done ===" -ForegroundColor Cyan
+Write-Host "Resource group:   $resourceGroup"
+Write-Host "API gateway:      $gatewayUrl"
+if (-not $SkipFrontendDeploy) {
+    Write-Host "Frontend:         https://$staticWebAppHostname"
+}
+Write-Host "`nThis is an art-of-the-possible evaluation environment - see 'Purpose and use boundary' in README.md before any production use." -ForegroundColor Yellow

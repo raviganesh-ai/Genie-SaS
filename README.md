@@ -19,6 +19,8 @@ Genie is **not** a report generator. Every artifact it produces is backed by a t
 - [Architecture](#architecture)
   - [Genie Azure platform](#genie-azure-platform)
   - [Generated prototype isolation](#generated-prototype-isolation)
+  - [Modernize & Deliver pipeline](#modernize--deliver-pipeline)
+- [Quickstart: deploy to your own Azure subscription](#quickstart-deploy-to-your-own-azure-subscription)
 - [Core concepts](#core-concepts)
 - [Agents](#agents)
 - [Workflows](#workflows)
@@ -28,17 +30,13 @@ Genie is **not** a report generator. Every artifact it produces is backed by a t
 - [Local development](#local-development)
 - [Configuration reference](#configuration-reference)
 - [Authentication](#authentication)
-- [Deployment strategy](#deployment-strategy)
-  - [Deploying into a brand-new Azure subscription](#deploying-into-a-brand-new-azure-subscription)
-  - [Provisioning Foundry agents](#provisioning-foundry-agents)
-  - [Deploying application code (backend + frontend)](#deploying-application-code-backend--frontend)
-  - [Continuous deployment (GitHub Actions)](#continuous-deployment-github-actions)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Deploy log](#deploy-log)
 - [Known gaps / next phases](#known-gaps--next-phases)
 
 ---
+
 
 ## Architecture
 
@@ -58,9 +56,9 @@ Genie follows Clean Architecture in application code and uses Azure-native ident
 | **Evidence understanding** | Azure Content Understanding `prebuilt-documentSearch` converts supported documents and images into grounded Markdown through managed identity before Discovery agents run |
 | **Identity and secrets** | User-assigned managed identity and least-privilege Azure RBAC; secrets belong in Key Vault and are never embedded in images or source |
 | **Memory and artifacts** | Cosmos DB for durable session/memory/lineage state, Azure AI Search for enterprise knowledge, and Azure Storage for uploads and generated artifacts |
-| **Images and hosting** | Commit-pinned FastAPI images in Azure Container Registry, deployed to Azure Container Apps |
+| **Images and hosting** | Commit-pinned FastAPI images in Azure Container Registry, deployed to a dedicated backend Azure Container App inside the Container Apps environment |
 | **Observability** | Application Insights and Azure Monitor receive structured logs, traces, metrics, correlation IDs, and governance telemetry |
-| **Infrastructure** | Subscription-scoped Bicep creates the resource group, foundational Azure resources, and dedicated APIM subnet; GitHub Actions deploys the gateway/private endpoint and application revisions through Azure OIDC |
+| **Infrastructure** | Subscription-scoped Bicep (`infra/main.bicep`) creates the resource group, every foundational Azure resource (including the Container Registry and backend Container App), and a dedicated APIM subnet in one deployment - see [Quickstart](#quickstart-deploy-to-your-own-azure-subscription); GitHub Actions deploys the gateway/private endpoint and application revisions through Azure OIDC for Genie's own hosted environment |
 
 ### Generated prototype isolation
 
@@ -71,6 +69,16 @@ Deploy & Launch creates a separate runtime boundary for every newly generated pr
 *Figure 2. Per-prototype security and runtime isolation. Select the diagram to open the scalable SVG.*
 
 Each prototype receives a tagged `genie-proto-<mission-slug>` resource group, dedicated APIM service, VNet and private DNS, an internal backend Container Apps environment, a public frontend Container Apps environment, exact CORS origin, backend/frontend Container Apps, mission managed identity, RBAC assignments, and generated Foundry agents. The backend enables ingress at the app boundary so VNet-integrated APIM can reach it, while the internal environment keeps that ingress private and unreachable from the internet. The separate public environment makes only the generated static frontend internet-reachable and remains disposable with the prototype resource group. The generated frontend and APIM endpoint are anonymous; APIM enforces exact-origin browser CORS, per-client rate limiting, and correlation IDs before forwarding over the private network. CORS is not authentication, so non-browser clients that know the APIM URL can call it. The durable Cosmos inventory records the shared `genie-internal-user` owner, mission metadata, URLs, resource group, TTL, and cleanup state. The fixed internal principal has `Genie.Admin`, so all callers share inventory and cleanup authority.
+
+### Modernize & Deliver pipeline
+
+"Modernize and deliver" is a separate concern from the two Azure-topology diagrams above - it is one of Genie's mission flows, letting a user bind an existing GitHub repository, generate a governed Azure AI Foundry modernization plan for one of six capabilities, and (once approved) have Genie itself open a real draft pull request.
+
+[![Genie Modernize and Deliver pipeline showing a bound GitHub repository, live dependency assessment, modernization capability selection, Azure AI Foundry plan generation, human governance approval, real branch/commit/draft pull request execution, and the capability-specific outcome](docs/architecture/modernize-deliver-pipeline.svg)](docs/architecture/modernize-deliver-pipeline.svg)
+
+*Figure 3. The Modernize & Deliver pipeline. Select the diagram to open the scalable SVG.*
+
+Every step is a real, deterministic call against GitHub (via the GitHub MCP connection) and Azure AI Foundry - never a simulated or narrated result. Five of the six capabilities (language/runtime upgrade, framework upgrade, dependency upgrade/replacement, strategy recommendation, and monolith-to-modular) end at the opened draft pull request plus a capability-specific "what's next" message; only Rehost to Azure has an additional, separately governed Azure Container Apps deployment step.
 
 ### Layering rules (enforced by tests)
 
@@ -96,6 +104,36 @@ Every agent execution, agent-to-agent handoff, memory read/write, tool invocatio
 ### Fail-closed startup
 
 Before accepting any traffic, the backend runs 10 mandatory startup validators (`RuntimeVersion`, `Configuration`, `ProviderMode`, `ProductionSafety`, `AgentRegistry`, `WorkflowRegistry`, `PromptTemplate`, `MemoryPolicy`, `GovernanceProvider`, `NoHardcoding`), plus (in production mode only) Foundry-specific validators that verify every enabled agent's `foundry_agent_id` actually resolves in Azure AI Foundry and has no critical configuration drift. `/health/ready` only returns 200 once all validation has passed.
+
+---
+
+## Quickstart: deploy to your own Azure subscription
+
+Genie deploys into **any Azure subscription you own** - never a value or credential belonging to anyone else. One script provisions a complete, isolated evaluation environment end to end:
+
+```powershell
+git clone <this-repo-url>
+cd Genie-SaS
+./scripts/deploy_quickstart.ps1
+```
+
+It's fully interactive and never assumes a specific tenant/subscription/account:
+
+1. Confirms your signed-in `az` identity (or runs `az login` for you) and lets you pick which subscription to deploy into.
+2. Prompts for everything the deployment needs - environment name, Azure region, your own GitHub Personal Access Token (for the GitHub MCP connection Modernize & Deliver uses), an APIM publisher contact, and which LLM model to deploy. Nothing is pre-filled with a real value, and no credential is ever written to a file this repository tracks.
+3. Validates Azure resource-provider readiness (fails closed rather than deploying partway).
+4. Deploys `infra/main.bicep` - a single subscription-scoped Bicep template that creates its own resource group and **every** foundational Azure resource Genie needs: managed identity, Key Vault, Storage, AI Search, Cosmos DB, Azure AI Foundry (+ your chosen model deployment), VNet, Container Apps environment, **Azure Container Registry**, and a **bootstrap backend Container App** - see [Architecture](#genie-azure-platform).
+5. Builds and pushes the real FastAPI image, then rolls it onto that Container App.
+6. Provisions the dedicated Standard v2 APIM gateway (`scripts/deploy_platform_gateway.ps1`).
+7. Provisions every Genie agent as a real Azure AI Foundry resource (`scripts/provision_foundry_agents.py`).
+8. Builds and deploys the frontend to the Static Web App Bicep already created.
+9. Runs the same health checks documented in [Troubleshooting](#troubleshooting).
+
+This is intentionally **long-running** (Azure API Management Standard v2 provisioning alone commonly takes 30-45 minutes) and **stops at the first failure** rather than attempting a partial/best-effort deployment - every stage it calls is independently idempotent, so re-running the script after fixing a problem is safe.
+
+Want to understand or customize an individual stage, reuse existing Azure resources, or see how Genie's own continuous deployment pipeline works? See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full manual/advanced reference.
+
+> Per the [Purpose and use boundary](#purpose-and-use-boundary) above: this reproduces Genie's **art-of-the-possible evaluation environment**, not a production-ready deployment.
 
 ---
 
@@ -304,12 +342,19 @@ config/             Externalized configuration (never hardcoded in source)
 infra/              Bicep infrastructure-as-code
   main.bicep                        Subscription-scoped entry point (creates its own RG)
   modules/foundational-resources.bicep   RG-scope aggregator
+  modules/container-registry.bicep       Azure Container Registry (AcrPull RBAC only)
+  modules/backend-container-app.bicep    The real backend Container App (bootstrap image)
   modules/*.bicep                   One module per resource type
+  platform-private-gateway.bicep    Standard v2 APIM gateway + private network cutover
 
-scripts/            Operator CLI scripts (deployment readiness, RBAC role generation,
-                    Foundry agent provisioning/sync/validation/inventory export)
+scripts/            Operator CLI scripts
+  deploy_quickstart.ps1   One-command deploy into any Azure subscription - see Quickstart
+  (deployment readiness, RBAC role generation, Foundry agent
+   provisioning/sync/validation/inventory export, individual deploy stages)
 
 docs/GENIE_BUILD_SPEC.md   Full build specification
+docs/DEPLOYMENT.md         Manual/advanced deployment reference + CI/CD one-time setup
+docs/CHANGELOG.md          Dated deploy log (what changed in the shared environment, and why)
 e2e/                       Playwright end-to-end tests (scaffolding)
 .github/copilot-instructions.md   Architecture/coding rules enforced across the repo
 ```
@@ -384,7 +429,7 @@ All backend configuration is via environment variables prefixed `GENIE_` (pydant
 | `GENIE_MEMORY_STORE_CONTAINER_NAME` | `memory` | Shared Cosmos container partitioned by record family |
 | `GENIE_LINEAGE_STORE_BACKEND` | `in_memory` | Same pattern as memory store, for governance/lineage |
 | `GENIE_LINEAGE_STORE_ENDPOINT` | *(none)* | Required in production |
-| `GENIE_DEFAULT_LLM` | `gpt-5.1` | Default model deployment name for agents that omit `model_deployment_ref` |
+| `GENIE_DEFAULT_LLM` | `gpt-5-mini` | Default model deployment name for agents that omit `model_deployment_ref` |
 | `GENIE_DEBUGGING_WORKFLOW_ID` | `debugging-workflow` | Workflow id run on `FailureDetected` |
 | `GENIE_REQUIREMENTS_QUALIFICATION_STEP_ID` | `analyze-requirements` | Workflow step id whose output is checked for an agentic-workflow qualification verdict |
 | `GENIE_DEPLOYMENT_FIDELITY_MAX_REPAIR_ATTEMPTS` | `3` | Max automatic regenerate-and-redeploy attempts Requirement Validation makes before launching with visible gaps |
@@ -440,250 +485,6 @@ Genie and every generated prototype are intentionally anonymous:
 
 ---
 
-## Deployment strategy
-
-The long-lived Genie **evaluation environment** consists of: (1) Bicep infrastructure-as-code that provisions foundational Azure resources and a dedicated APIM subnet, (2) a public Standard v2 APIM gateway with outbound VNet integration, (3) a FastAPI Container App reached only through its environment private endpoint, and (4) a static React frontend deployed to Azure Static Web Apps. Generated prototypes are separate: each receives its own APIM service and private Container Apps environment. Deployment is split into readiness validation → infrastructure provisioning → agent provisioning → gateway/private-network cutover → application deployment, matching the repo's fail-closed philosophy: nothing proceeds until the previous step is verified. These deployment instructions reproduce the evaluation environment; they do not supersede the production-readiness work required by the [purpose and use boundary](#purpose-and-use-boundary).
-
-### Deploying into a brand-new Azure subscription
-
-**Prerequisites**
-
-- Azure CLI (`az`) installed and logged in (`az login`) against the target subscription and tenant.
-- Contributor-equivalent (or the custom role generated below) rights on the target subscription.
-- PowerShell (scripts are `.ps1`; can be run via `pwsh` on non-Windows too).
-
-**1. Create a least-privilege deployment identity (optional but recommended)**
-
-```powershell
-python scripts/generate_deployment_role_definition.py   # renders a custom RBAC role from config/deployment/resource_providers.yaml
-./scripts/create_deployment_identity.ps1                # creates/assigns the "Genie Infrastructure Deployer" role
-```
-
-This role only grants `<namespace>/*` actions for the 12 resource-provider namespaces Genie actually needs (never `Owner`/`Contributor`). If your tenant blocks service-principal secret/certificate creation (common in managed/enterprise tenants), the script falls back to assigning the role directly to your signed-in user account.
-
-**2. Validate deployment readiness**
-
-```powershell
-python scripts/validate_deployment_readiness.py
-```
-
-Confirms every required Azure resource-provider namespace (`Microsoft.Resources`, `Authorization`, `ManagedIdentity`, `KeyVault`, `Storage`, `CognitiveServices`, `Search`, `DocumentDB`, `App`, `Web`, `OperationalInsights`, `Insights`, plus `Marketplace`/`MarketplaceOrdering`/`SaaS` if you plan to deploy partner models) is `Registered`. Registers via:
-
-```powershell
-az provider register --namespace <namespace>
-```
-
-Re-run the validator until every provider shows `Registered` (registration is asynchronous and can take several minutes) before proceeding.
-
-**3. Provision infrastructure**
-
-```powershell
-./scripts/deploy_infra.ps1 -EnvironmentName dev -Location eastus2
-# Optional: -AiSearchLocation eastus   (if AI Search lacks capacity in the primary region)
-```
-
-This gates on step 2 passing, then runs:
-
-```powershell
-az deployment sub create `
-  --location <location> `
-  --template-file infra/main.bicep `
-  --parameters infra/main.parameters.json environmentName=<env> location=<location>
-```
-
-`main.bicep` is **subscription-scoped** and assumes the target subscription is empty — it creates its own resource group (`<resourcePrefix>-<environmentName>-rg`, default prefix `genie`) and every foundational resource:
-
-| Module | Resource |
-|---|---|
-| `managed-identity.bicep` | User-assigned managed identity (shared by every resource below via least-privilege RBAC) |
-| `key-vault.bicep` | Azure Key Vault |
-| `storage-account.bicep` | Azure Storage Account |
-| `ai-search.bicep` | Azure AI Search (Enterprise Knowledge Memory) |
-| `cosmos-db.bicep` | Cosmos DB (Shared/Personal Memory, sessions) |
-| `ai-foundry.bicep` | Azure AI Foundry account + project |
-| `virtual-network.bicep` | VNet with dedicated Container Apps, private endpoint, and delegated APIM integration subnets |
-| `container-apps-environment.bicep` | Container Apps environment (hosts the backend) |
-| `static-web-app.bicep` | Azure Static Web App (hosts the frontend) |
-| `log-analytics.bicep` + `app-insights.bicep` | Observability |
-
-Every resource is granted only the specific RBAC role it needs on the shared managed identity (Key Vault Secrets User, Storage Blob Data Contributor, Search Index Data Contributor, Cognitive Services User, Cosmos DB Built-in Data Contributor) — never a broad Owner/Contributor grant.
-
-After the backend Container App exists, `infra/platform-private-gateway.bicep` adds the Standard v2 APIM service and anonymous proxy API, exact-origin policy, private endpoint, and `privatelink.<region>.azurecontainerapps.io` DNS integration. `scripts/deploy_platform_gateway.ps1` controls the safe cutover rather than having foundational provisioning disable access before a gateway can be verified.
-
-Capture the outputs (`aiFoundryEndpoint`, `aiSearchEndpoint`, `keyVaultUri`, `storageAccountName`, `cosmosDbEndpoint`, `managedIdentityPrincipalId`, `containerAppsEnvironmentId`, `staticWebAppDefaultHostname`, `applicationInsightsConnectionString`) via:
-
-```powershell
-az deployment sub show --name <deployment-name> --query properties.outputs
-```
-
-**4. Deploy an LLM model**
-
-Deploy at least one model to the AI Foundry account (Cognitive Services deployment). For models sold directly by Azure (e.g. `gpt-5.1`):
-
-```powershell
-az cognitiveservices account deployment create `
-  --name <foundry-account-name> --resource-group <rg> `
-  --deployment-name <deployment-name> --model-name <model> --model-version <version> `
-  --model-format OpenAI --sku-name GlobalStandard --sku-capacity 10
-```
-
-For Azure Marketplace / partner models (e.g. Anthropic Claude), the CLI has no flag for `ModelProviderData` — use a direct REST call instead:
-
-```powershell
-az rest --method put `
-  --uri "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<account>/deployments/<name>?api-version=2026-05-15-preview" `
-  --body '{"properties":{"model":{"format":"...","name":"...","version":"..."},"modelProviderData":{"industry":"Technology","organizationName":"<org>","countryCode":"US"}},"sku":{"name":"GlobalStandard","capacity":1}}'
-```
-
-> Requires the target Marketplace SKU to actually have non-zero quota on the subscription — request a quota increase first if `InsufficientQuota` is returned.
-
-Set `Settings.DEFAULT_LLM` / `GENIE_DEFAULT_LLM` (and any per-agent `model_deployment_ref` overrides in `config/agents/registry.yaml`) to match the deployment name you chose.
-
-### Provisioning Foundry agents
-
-Genie agents are **real Foundry agent resources**, provisioned once per environment — never created ad hoc by the running application.
-
-```powershell
-# Requires the caller to hold "Cognitive Services User" (or equivalent) at the
-# Foundry PROJECT scope (not just the account scope) for data-plane writes.
-python scripts/provision_foundry_agents.py
-```
-
-Uses the `azure-ai-projects` SDK (`AIProjectClient(endpoint=..., credential=DefaultAzureCredential())`) to create one Foundry agent per enabled entry in `config/agents/*.yaml` and prints each resulting `foundry_agent_id` for you to paste back into the registry YAML (the script deliberately never writes back to source control itself).
-
-Verify every agent resolves correctly:
-
-```powershell
-python scripts/validate_foundry_agents.py     # runs the fail-closed Foundry validators directly
-python scripts/sync_foundry_agents.py         # confirms each enabled agent's foundry_agent_id exists (status: synchronized)
-python scripts/export_foundry_inventory.py    # dumps the config-derived inventory as JSON
-```
-
-All three require `GENIE_AZURE_FOUNDRY_ENDPOINT` / `GENIE_AZURE_FOUNDRY_PROJECT_NAME` to be set and must be run from the repository root (so the relative `config/` path resolves correctly).
-
-### Deploying application code (backend + frontend)
-
-**Backend (Azure Container Apps)**
-
-1. Build and push the immutable FastAPI image to Azure Container Registry:
-
-   ```powershell
-   az acr build --registry <acr-name> --image genie-backend:<commit> `
-     --file backend/Dockerfile <source>
-   ```
-
-   `<source>` can be a local directory (`.`) or a git URL (`https://github.com/<org>/<repo>.git#<branch>`, optionally with an embedded token for a private repo: `https://<token>@github.com/...`) — use whichever works reliably in your build environment.
-
-2. Provision APIM, prove it reaches the current backend, prepare private DNS, disable Container Apps environment public access, create the private endpoint, and prove both the private gateway route and direct-route denial:
-
-   ```powershell
-   $gateway = ./scripts/deploy_platform_gateway.ps1 `
-     -SubscriptionId <subscription-id> `
-     -ResourceGroup <rg> `
-     -ContainerAppName genie-backend `
-     -AllowedOrigin https://<static-web-app-host> `
-     -PublisherEmail <publisher-email> `
-     -PublisherName "Genie" | ConvertFrom-Json
-   ```
-
-    The first deployment can take tens of minutes while Standard v2 APIM is created. Public Container Apps access is not changed unless APIM is healthy and private DNS preparation succeeds. Azure requires environment public access to be disabled before private endpoint creation, so an endpoint failure leaves the backend closed rather than restoring public ingress. Repeated runs are idempotent and resume a closed-but-incomplete cutover by creating the missing private endpoint before probing APIM.
-
-3. Atomically update the backend image, remove retired gateway containers and auth settings, configure CORS/probes, target FastAPI port `8000`, and verify the revision through APIM:
-
-   ```powershell
-   ./scripts/deploy_backend.ps1 `
-     -SubscriptionId <subscription-id> `
-     -ResourceGroup <rg> `
-     -ContainerAppName genie-backend `
-     -BackendImage <acr-name>.azurecr.io/genie-backend:<commit> `
-     -AllowedOrigin https://<static-web-app-host> `
-    -GatewayUrl $gateway.gatewayUrl `
-     -MemoryStoreEndpoint https://<cosmos-account>.documents.azure.com/ `
-     -PrototypeApiGatewayPublisherEmail <publisher-email> `
-     -PrototypeApiGatewayPublisherName "Genie" `
-     -RevisionSuffix <unique-suffix>
-   ```
-
-   The script preserves the existing identity, environment, secrets, resources,
-   and unrelated containers; removes `genie-auth-gateway`/`mise-sidecar` plus
-   stale user-auth settings; and applies the image, CORS, probes, and ingress
-  target in one ARM patch. It requires environment public access to remain
-  `Disabled`, waits for the exact revision, and verifies readiness plus anonymous
-  `GET /sessions` through APIM. Roll back by running the same script with the
-  previous backend image tag and a new revision suffix.
-
-   > If you're using a **user-assigned** managed identity, retain
-   > `AZURE_CLIENT_ID=<identity-client-id>` or `DefaultAzureCredential` cannot
-   > resolve which identity to use and the container will crash-loop.
-
-4. Verify:
-
-   ```powershell
-  curl https://<apim-name>.azure-api.net/health/live
-  curl https://<apim-name>.azure-api.net/health/ready
-  curl -i https://<apim-name>.azure-api.net/sessions  # must return 200
-  curl -i https://<container-app-fqdn>/health/ready   # must not return 2xx
-   ```
-
-**Frontend (Azure Static Web Apps)**
-
-1. Set `VITE_GENIE_API_BASE_URL` to the APIM gateway URL for the build. Production CI receives this URL directly from the verified `prepare-gateway` job; no production endpoint is committed in an env file.
-2. Build:
-
-   ```powershell
-   cd frontend
-   npm ci
-   npm run build      # -> dist/
-   ```
-
-3. Deploy:
-
-   ```powershell
-   $token = az staticwebapp secrets list --name <swa-name> --query properties.apiKey -o tsv
-   npx @azure/static-web-apps-cli deploy dist --deployment-token $token --env production
-   ```
-
-### Continuous deployment (GitHub Actions)
-
-`.github/workflows/ci.yml` runs on every push/PR to `main` (the repo's actual default branch - confirmed via `git branch -a`/`git remote show origin`). On a real push to `main`, once the `backend` and `frontend` CI jobs pass, two deploy jobs run the exact same steps documented above, automatically:
-
-- **`prepare-gateway`** — logs into Azure via OIDC federated credential (no client secret), idempotently provisions Standard v2 APIM and its delegated subnet/NSG, proves the gateway reaches the current backend, and emits the verified URL without changing Container Apps public access.
-- **`deploy-frontend`** — builds the frontend against that exact gateway job output and deploys it with `@azure/static-web-apps-cli` using a stored deployment token. It no longer trusts a separately maintained production API URL variable.
-- **`deploy-backend`** — waits for the frontend cutover, builds the commit-pinned FastAPI image, prepares private DNS, disables Container Apps public access, creates/verifies the private endpoint, proves APIM still works and direct ingress is denied, then runs `deploy_backend.ps1` so the image, retired-sidecar removal, CORS, probes, and ingress are updated atomically and verified through APIM.
-
-**One-time setup** (already performed for this environment — documented here so it can be reproduced on a new subscription/repo):
-
-1. A dedicated app registration (`genie-github-actions-deploy`, no client secret) holds a **federated identity credential** trusting this repo's GitHub Actions OIDC issuer, scoped to the `production` GitHub Environment — narrower than a branch-based subject, since it also requires the workflow job to declare `environment: production`. **Important**: the subject must match GitHub's *actual* token claim exactly, which is `repo:<org>/<repo>:environment:<env>` only if the org/repo have never been renamed — if either has been renamed, GitHub appends numeric IDs instead (`repo:<org>@<orgId>/<repo>@<repoId>:environment:<env>`). Get the exact value from a failed `azure/login@v2` run's log line `Federated token details: ... subject claim - ...` if login fails with `AADSTS700213`.
-2. That identity's service principal holds three least-privilege assignments (never a subscription- or resource-group-wide Owner/Contributor grant):
-   - **Container Registry Tasks Contributor**, scoped to just the ACR resource — covers `az acr build`'s scheduleRun/upload actions without granting registry data-plane push/pull.
-  - **Container Apps Contributor**, scoped to just the `genie-backend-corporate` Container App resource — covers the atomic ARM patch.
-  - **Genie Platform Gateway Deployer**, scoped to the Genie resource group — a custom role containing only resource-group deployment, APIM API, delegated subnet/NSG, VNet join, private endpoint/DNS, and Container Apps environment update/approval actions. It contains no delete or authorization-management action. Create/update and assign it once with `scripts/configure_platform_gateway_deployer.ps1 -SubscriptionId <id> -ResourceGroup <rg> -PrincipalObjectId <oidc-service-principal-object-id>`.
-3. The **runtime Genie backend managed identity** has the custom `Genie Prototype Resource Group Operator` role plus API Management Service Contributor, Network Contributor, Container Apps Contributor, Managed Identity Contributor, and Managed Identity Operator at subscription scope. The custom role permits resource-group lifecycle plus only the managed-environment create/read and operation-status actions missing from Azure's built-in Container Apps Contributor role; the built-in roles remain restricted to their respective provider surfaces. Shared ACR and role-assignment permissions remain constrained to existing resource scopes. New prototypes do not require Microsoft Graph application writes. Create/update and assign the custom role with `scripts/configure_prototype_operator.ps1 -SubscriptionId <id> -PrincipalObjectId <runtime-managed-identity-object-id>`.
-4. The repo's **Settings → Secrets and variables → Actions** has:
-  - **Secrets**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identify the federated deployment app, not credentials by themselves), and `SWA_DEPLOYMENT_TOKEN`.
-  - **Variables**: `AZURE_ACR_NAME`, `AZURE_CONTAINER_APP_NAME`, `AZURE_RESOURCE_GROUP`, `GENIE_GATEWAY_ALLOWED_ORIGIN`, `GENIE_MEMORY_STORE_ENDPOINT`, `GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_EMAIL`, `GENIE_PROTOTYPE_API_GATEWAY_PUBLISHER_NAME`, and `GENIE_PROTOTYPE_MAX_ACTIVE_PER_OWNER` (`0` for unlimited). `VITE_GENIE_API_BASE_URL` is no longer a production GitHub variable; `prepare-gateway` emits it from the APIM deployment.
-
-If this identity/RBAC/secrets setup is ever missing or revoked, `deploy-backend`/`deploy-frontend` fail fast (within seconds, at an explicit "Check required secrets" step) rather than hanging — the `backend`/`frontend` test jobs are unaffected either way and still gate every PR.
-
-Content Understanding also requires completion and embedding model aliases on the AIServices resource. Configure them once per environment with externally supplied deployment/model names:
-
-```powershell
-./scripts/configure_content_understanding.ps1 `
-  -SubscriptionId <subscription-id> `
-  -ResourceGroup <resource-group> `
-  -AccountName <ai-services-account> `
-  -CompletionDeploymentName <completion-deployment> `
-  -CompletionModelName <supported-completion-model> `
-  -CompletionModelVersion <completion-model-version> `
-  -EmbeddingDeploymentName <embedding-deployment> `
-  -EmbeddingModelName <supported-embedding-model> `
-  -EmbeddingModelVersion <embedding-model-version>
-```
-
-The script uses Microsoft Entra authentication, creates only missing model deployments, checks both model families against the live analyzer's `supportedModels`, PATCHes the analyzer aliases as resource defaults, and reads them back. The runtime managed identity requires **Cognitive Services User** on the AIServices account. Production startup independently reads the analyzer and defaults and refuses readiness when the analyzer is unavailable or any required alias is unmapped.
-
----
-
 ## Testing
 
 | Layer | Command | Notes |
@@ -709,369 +510,9 @@ The script uses Microsoft Entra authentication, creates only missing model deplo
 
 ## Deploy log
 
-Every deployment to the shared Azure evaluation environment (backend Container App and/or frontend Static Web App) is recorded here: commit, what changed, and why. Update this section as part of the same commit that ships the fix/feature, before pushing to `main` triggers [Continuous deployment](#continuous-deployment-github-actions).
+Every deployment to the shared Azure evaluation environment is recorded in [docs/CHANGELOG.md](docs/CHANGELOG.md): commit, what changed, and why. Update that file as part of the same commit that ships the fix/feature, before pushing to `main` triggers [Continuous deployment](docs/DEPLOYMENT.md#continuous-deployment-github-actions).
 
-### 2026-10-02 — Fix CI/CD never triggering (branch mismatch) + Deploy & Launch stage grouping + Governance page
-
-- **Real, previously-undiscovered CI/CD bug**: `.github/workflows/ci.yml`'s `on: push`/`pull_request` triggers (and all three deploy jobs' `if:` conditions) watched branch `master`, but this repo's actual default/only branch has always been `main` (confirmed via `git branch -a` and `git remote show origin`). `gh run list` showed **zero workflow runs in the repo's history** - every "committed and deployed" step this project has ever gone through was a manual `az acr build`/`az containerapp update`/`swa deploy` command, never the documented CI/CD pipeline. Fixed by pointing every trigger/condition at `main`; this commit's own push is the first one the fixed workflow actually picks up.
-- **Deploy & Launch "Mission Progress" simplified to 9 stages**: the real, always-executed 12-step `DEPLOYMENT_STEP_ORDER` pipeline is unchanged server-side, but `DeployLaunchPage.tsx` now groups a handful of internal/technical steps into their neighboring user-meaningful stage for display (contract validation into "Generate Access Policy & Least Access", schema validation into "Provision Data Layer", test generation/execution into "Validate Requirements") - matching the simple, named list the user asked for, with zero functionality removed. Retrying a failed stage resumes from that stage's own first incomplete real step.
-- **"Governance" sidebar page was empty for non-modernization missions**: `PhaseTrackingPage.tsx` only ever rendered modernization-specific phase/task data, so a `discover_requirements`/prototype mission's Governance page looked entirely blank ("Governance was skipped"). It now renders the already-built but previously-unused `useGovernanceTrace` hook's real governance events, approval checkpoints (with inline Approve/Reject), and an overall compliance badge for every mission kind; the modernization phase/task tracker still renders additively once a session actually has tracked phases.
-- **Tests**: updated `deploy_launch.test.tsx` (2 new tests for stage grouping/targeted retry, 1 existing test rewritten for the new visible stage names; 12/12 pass); new `phase_tracking_page.test.tsx` (3 tests); full frontend suite 91/91 passed, typecheck/lint clean.
-- **Deployed via**: manual `npm run build` + `@azure/static-web-apps-cli deploy` (frontend-only change; no backend changes in this entry).
-
-### 2026-09-29 — Orchestrator prompts must surface specialist stage failures instead of silently swallowing them
-
-- **Incident**: the live `sampl-989d7318` blind-MQM translation-QA mission was given a valid, correctly-formatted uploaded package and its generated Orchestrator ran to completion, but returned a well-formed, entirely empty result (0 documents processed, 0 experiments, null system winner, all 7 required languages reported as "missing"). The existing COVERAGE VALIDATION contract faithfully reported the gap, but could not distinguish "the input genuinely had none of the required items" from "an upstream specialist agent's call raised and was silently caught".
-- **Prompt fix, not a patch to the deployed prototype**: both `build-generation-v1` and `build-generation-component-v1` gained a STAGE FAILURE TRANSPARENCY instruction requiring generated Orchestrators to never wrap a specialist agent's call in a broad try/except that swallows an exception into an empty/default result. Any caught specialist-agent failure must be captured into the returned `dict` as `"stage_errors"`, narrated via `on_progress` so the live UI shows it, and must set `"success": false` — so a broken pipeline is never indistinguishable from a plain empty-input success. This applies to all future generated missions; the already-deployed Sampl prototype instance itself was left unmodified.
-- **Verification**: a new regression test (`test_orchestrator_prompts_require_surfacing_specialist_stage_failures`) pins the presence of this instruction and its required JSON keys in both prompts; the full prompt-contract and registry test suites (65 tests) pass.
-
-### 2026-09-29 — Connect generated UI and backend by construction
-
-- **Sample integration fix**: the Sample prototype UI submitted shorthand JSON fields such as `runId`, while its generated orchestrator read different names such as `runIdOutputDirectoryName`; the backend therefore failed before its first stream event and the UI reported that it returned no output.
-- **No new gate**: UI generation now receives the already-generated orchestrator source as authoritative context and uses its exact request keys directly. Genie does not add a new validation stage or withhold a prototype over component naming.
-- **Prototype stays useful**: if generated pipeline glue still cannot accept a request, the mission backend records the error and uses its existing Orchestrator Agent fallback with the full uploaded sample content instead of returning an empty stream.
-- **Portable regression coverage**: the structured-upload fallback test uses the generated backend's configured working directory with isolated temporary storage on both Linux CI and Windows development hosts.
-
-### 2026-09-29 — Fix generated prototype frontend manifests
-
-- **Valid package metadata**: generated prototype frontends now serialize `package.json` from structured data, preserving the quoted nonblocking Impeccable command as valid JSON.
-- **Observed failure fixed**: SampleDemo ACR runs `chdg` through `chdk` failed at `npm install` with `EJSONPARSE`; the generated application code was never reached.
-
-### 2026-09-28 — Keep prototyping stages moving
-
-- **Prototype-first flow**: generated acceptance-test formatting, missing coverage, weak evidence, test failures, timeouts, and exhausted fidelity repair no longer withhold an already deployed prototype. Genie launches it with explicit validation gaps.
-- **Repair and truth preserved**: requirement and goal checks still run, trigger bounded regeneration, and cannot falsely become passing evidence when a generated suite uses mocks or fails real-action validation.
-- **Advisory visual lint**: Impeccable still inspects every generated frontend and reports findings, but styling guidance no longer stops a buildable prototype from deploying.
-- **Best-effort progress narration**: missing exact specialist hand-off phrases may reduce Agent Pipeline animation detail, but no longer blocks otherwise runnable generated code.
-- **Real blockers only**: unreadable input, unavailable Foundry execution, denied authorization or governance decisions, generated code that cannot run, high/critical security findings, and failed Azure provisioning remain blocking because no safe working prototype exists.
-
-### 2026-09-28 — Judge the prototype, not architecture formatting
-
-- **Unblocked generation**: Architecture and generated source no longer fail merely because their text omits one or more literal approved `REQ-*` identifiers, and component generation no longer repeats that precheck before invoking the Build Agent.
-- **Intelligent responsibility split**: approved requirements and goals continue to guide architecture and generation, while semantic fidelity is established by the generated implementation and real deployed outcome evidence rather than ID repetition in an intermediate document.
-- **Meaningful safeguards preserved**: incomplete or failed generated components remain blocked; approved-goal and supporting-requirement gaps remain visible and drive bounded repair.
-
-### 2026-09-28 — Make approved goals non-negotiable
-
-- **Goal completeness**: every approved goal now requires its own dedicated end-to-end test and passing evidence, even when aggregate requirement coverage has already met the configured threshold. The threshold remains unchanged for non-goal requirements, avoiding a broader restriction.
-- **Evidence quality**: generated goal tests are rejected when they contain only constant, HTTP-status, or nonempty-JSON assertions. Domain assertions may remain in local helper functions, preserving normal test organization.
-- **Repair behavior**: a missing goal enters the bounded test-generation repair loop; if the gap persists, Launch continues with that gap explicitly recorded.
-
-### 2026-09-28 — Prove the approved mission goal end to end
-
-- **Goal-preserving generation**: Requirement Agent goals now receive stable `REQ-*` IDs and observable outcomes; architecture and build prompts must preserve each exact approved goal through the specialist workflow and generated orchestrator result.
-- **Dedicated outcome evidence**: goal requirements pass fidelity coverage only through real black-box tests named `test_goal_req_<id>_<outcome>`. Metadata, configuration, schema, nonempty output, and HTTP status alone cannot satisfy the mission goal. The fidelity dashboard identifies approved goals separately from supporting requirements.
-- **Startup safety**: generated orchestrators that reference the nonexistent `asyncio.Random` type are rejected during materialization, before Azure deployment, with guidance to use `random.Random`.
-
-### 2026-09-28 — Reject generated request-schema drift before deployment
-
-- **Incident**: an MSFT-Genie prototype UI submitted `runNameTag`, while its generated orchestrator required `runName`; runtime validation correctly failed the request, but only after Azure resources had been provisioned and the UI was exercised.
-- **Pre-deployment contract gate**: materialization now compares statically generated flat UI payload keys with the keys read from `json.loads(ui_message)`, including one-hop validation helpers, and rejects missing or differently cased keys before Foundry-agent or Container App deployment begins.
-- **Validation preserved**: generated runtime type, range, package, and policy checks remain unchanged. Regression coverage proves the mismatched contract is rejected and a matching helper-based contract remains valid.
-
-### 2026-09-28 — Keep generated Container App names Azure-valid
-
-- **Length-safe naming**: backend and frontend Container App names now respect Azure's 32-character limit. Existing short names are unchanged; only overlength workload names receive deterministic truncation plus a collision-resistant hash.
-- **Lifecycle consistency**: deployment and governed cleanup derive the same component name, preventing both provisioning failures and orphaned resources for long workload titles.
-- **Regression coverage**: tests reproduce the `interal-demo-c0d89e27` failure, verify Azure's full naming contract, prevent truncation collisions, and preserve existing short-name behavior.
-
-### 2026-09-28 — Prevent false generated-build repair loops
-
-- **Gate-aware sample validation**: exact target-count comparisons are rejected only when they disable submission or terminate execution. Warning-only comparisons that report representative-sample coverage no longer force pointless Build Agent regeneration.
-- **Qualified agent progress**: specialist labels with trailing role qualifiers, such as `Evaluator (Primary Judge)`, may use their unique base name in live hand-off narration. Mission Control applies collision-safe alias matching when narration is available.
-- **Actionable retries**: deterministic validation failures now include the actual failed contract in the displayed Deploy & Launch step while automatic repair runs, rather than showing only a generic regeneration message.
-
-### 2026-09-28 — Keep generated POCs testable with representative samples
-
-- **Sample-friendly execution**: Build prompts now require generated UIs and orchestrators to process any non-empty, structurally valid representative sample end to end. Production target counts remain visible as required/processed/gap coverage evidence instead of blocking submit or stopping the agent pipeline.
-- **Visible agent work**: Build prompts request start and completion narration for every specialist agent so the Agent Pipeline can light up node by node during real processing; missing narration is advisory.
-- **Deterministic generation safeguard**: materialization rejects exact uploaded-item cardinality gates that would prevent representative samples from running; focused unit and real-prompt contract tests cover the rule.
-
-### 2026-09-27 — Preserve workflow handoffs across revisions
-
-- **Durable collaboration memory**: production Shared Collaboration Memory now uses the same managed-identity Cosmos store as durable workflow runs, so requirements and architecture handoffs survive backend revisions.
-- **Governed recovery**: a missing historical handoff may be satisfied only by a non-empty explicit override for that exact configured `step:<id>` variable. Unresolved required references still fail closed, while durable pre-fix runs can regenerate from their persisted approved inputs.
-- **Regression coverage**: repository tests recreate the Cosmos adapter and recover the same record; orchestration tests cover both explicit recovery and the unchanged missing-reference failure.
-
-### 2026-09-27 — Restore architecture fidelity gate state
-
-- **Approval integrity**: Architecture Studio now carries the persisted `generating`, `completed`, or `failed` workflow-step state with each displayed architecture. Rejected architecture output can no longer be approved as if it completed successfully; the page shows the exact fidelity failure and offers regeneration, including after a service restart when the rejected shared-memory artifact is no longer available.
-- **Mission Trace truth**: the trace polls the durable workflow result and gives a persisted step failure precedence over route-based optimistic state. After a valid architecture approval navigates to UI & Agent Design, the build gate displays as proceeded while the first build event is still arriving.
-- **Regression coverage**: backend and frontend tests cover failed architecture output recovered from shared memory, blocked approval, regeneration affordance, and approved-build trace state.
-
-### 2026-09-27 — Restore the September 13 application baseline
-
-- **Baseline restoration**: application, configuration, workflow, frontend, and test sources are restored to commit `cd41592`, the final commit from 2026-09-13, while retaining git history.
-- **Unlimited prototypes**: the explicit `GENIE_PROTOTYPE_MAX_ACTIVE_PER_OWNER=0` contract remains; positive values still enable an operator cap.
-- **Forward-compatible recovery**: the restored backend accepts the two later persisted deployment-step identifiers and preserves their JSON reports without adding either step to the September 13 execution order. This lets startup fail interrupted runs closed and complete governed cleanup instead of crash-looping on durable inventory.
-- **Fresh-run cleanup**: the governed prototype cleanup path removes the interrupted MSFT-DEMO run, its mission identity, and its provisioned Foundry agents after the restored backend rehydrates the run as terminal.
-
-### 2026-09-13 — Complete Discovery PDF export and recoverable Azure pricing
-
-- **Complete PDF export**: **Export PDF** now sits beside **Save discovery** and opens the browser's native PDF workflow with a dedicated A4 landscape layout. The exported document retains the entire rendered Discovery while removing navigation, mission trace, and interactive controls.
-- **Retail meter accuracy**: pricing inputs now support the Azure Retail Prices service, product, SKU, meter, and unit-of-measure taxonomy. Exact lookups remain first; a bounded normalized fallback handles architecture display names and global meters without supplying synthetic prices. Tiered meters are calculated by usage band instead of applying the cheapest marginal rate to every unit.
-- **Recover existing cases**: partial and unavailable estimates now expose **Refresh Azure pricing**, which re-resolves the existing architecture's inputs without rerunning Foundry or changing the selected solution.
-
-### 2026-09-13 — Architecture-derived Azure solution cost
-
-- **Solution cost, not a generic run-rate label**: each probable solution now presents an **Estimated Azure solution cost** with monthly and annual totals, Azure region, Retail Prices coverage, and the service/SKU/usage assumptions contributing to that architecture estimate.
-- **Architecture is the source of truth**: Foundry must produce a pricing input for every independently billed Azure service and cannot price a service absent from the solution graph. Logical platform labels must expose their underlying billable resource as an architecture node. The external response boundary rejects mismatches and invokes the existing single corrective Foundry retry.
-- **Honest scope**: the UI identifies Azure consumption costs separately from implementation, support, taxes, and negotiated discounts. Missing Retail Prices records remain visibly partial or unavailable; Genie never fabricates a price.
-
-### 2026-09-13 — Professional Azure service architecture
-
-- **Deterministic topology**: probable solutions remain structured Foundry output, but the frontend no longer trusts model-supplied canvas coordinates. Dagre computes a stable left-to-right service graph from the returned nodes and edges, preventing the overlaps that made dense solution architectures unreadable.
-- **Azure-first presentation**: every bounded node leads with the real Azure service name and its allowlisted official icon, with concise purpose text secondary. Restrained orthogonal connectors, directional markers, edge labels, a service count, and a larger responsive workspace replace the previous animated generic graph treatment.
-- **Regression and visual coverage**: focused tests prove that model coordinates cannot affect layout, connected nodes progress left to right, node rectangles do not intersect, and the Discovery page exposes the service architecture accessibly. Browser checks cover a dense nine-service graph, official icon loading, node intersections, and desktop/mobile canvas behavior.
-
-### 2026-09-13 — Separate gaps and assumptions with bounded solution recovery
-
-- **Separate intelligence sections**: Section 3 remains the successful thematic **Pain points** view. A new Section 4, **Gaps and assumptions**, presents distinct Foundry-authored narratives for unresolved information and assumptions requiring customer validation rather than mixing either into the pain-point themes or exposing raw arrays.
-- **Workflow clarity**: **Clarify what matters** and **Probable solutions** move to Sections 5 and 6, and the progress indicator reflects the six-part Discovery flow. Existing cases without the new summaries receive concise fallbacks from their structured gap analysis until reanalyzed.
-- **Second production diagnosis**: after normalizing `Evidence_references`, the live solution retry reached a different failure: Foundry emitted malformed or truncated JSON at line 735, column 36. The large build-ready solution payload had no bounded recovery path.
-- **Bounded recovery**: solution output is capped below 20,000 characters with limits on architecture text, requirements, nodes, edges, tradeoffs, references, and pricing queries. Live verification on revisions `gh93` and `gh94` found that Foundry returned structurally valid, build-ready narratives beyond the original 4,000-character DTO limit even after an exact corrective retry. The prompt still targets concise 1,200–2,500-character narratives, while the external boundary now safely accepts up to 12,000 characters so complete valid requirements and architecture are preserved. The single fresh Foundry retry receives exact privacy-safe validation paths, and a second invalid response still restores `ready_for_solutions` and fails closed without local or static fallback.
-- **Verification**: focused tests cover summary persistence and invalidation, separate UI sections, prompt bounds, successful retry after truncation, and fail-closed behavior after two malformed responses.
-
-### 2026-09-13 — Discovery question progress and solution response compatibility
-
-- **Question progress**: **Clarify what matters** now displays the total question count and how many have been answered. Interactive mode counts the complete question set even though it renders only the next unresolved question; direct customer answers and accepted Genie recommendations count as answered.
-- **Production failure**: solution generation correlation ID `256e60fa-2500-4743-b4d1-d8578f59bc53` failed because Foundry returned `Evidence_references` while the external `_SolutionsEnvelope` accepted only canonical `evidence_references` and rejected the alternate casing as an extra field.
-- **Boundary normalization**: `_SolutionDraft` now explicitly accepts either known spelling at the Foundry boundary and maps both to canonical `evidence_references` before constructing the strict internal `ProposedSolution`. All other unexpected solution fields remain forbidden.
-- **Regression coverage**: the solution state-machine fixture uses the exact production casing and verifies that its evidence references survive parsing, pricing, persistence, and strict domain-model construction. Discovery UI coverage verifies the answered and total counts in one-at-a-time mode.
-
-### 2026-09-13 — Adaptive Discovery clarification
-
-- **No empty Q&A choice**: Foundry may return zero questions when the selected evidence already resolves every material implementation decision. Those cases move directly to probable-solution generation instead of asking the customer to choose between one-at-a-time and batch modes for an empty list.
-- **Intelligent answer options**: every generated clarification question carries two to four concise, evidence-aware alternatives grounded in the decision context and relevant Microsoft/Azure practices. The prompt forbids presenting assumptions as customer facts or producing superficial wording variants.
-- **Customer control**: both Q&A modes render the suggested answers as selectable options and retain an editable free-text field. Selecting an option fills the submitted answer; typing a different response supersedes the selection. Skipping remains an explicit path to the existing consent-gated best-practice recommendation.
-- **Verification**: state-machine coverage protects zero-question progression and answer-choice parsing; frontend interaction coverage verifies option selection, custom-answer override, and suppression of the Q&A mode chooser when no questions exist.
-
-### 2026-09-12 — Discovery deep-dive response resilience
-
-- **Production diagnosis**: **Run Discovery** reached the Foundry-hosted Requirements Analyst but correlation ID `d30d64d3-623b-466b-b92c-521ae18351c8` failed at the strict `_DeepDiveEnvelope` response boundary. Privacy-safe diagnostics and a live retry on revision `gh88` identified the real cause: Foundry returned truncated JSON at column 26,692 while analyzing three large documents.
-- **Resilient validation**: the external deep-dive envelope, gap analysis, and question drafts now ignore unrecognized metadata before mapping into Genie's strict internal models. Required findings, gap fields, question fields, types, and confidence bounds remain validated and malformed core content still fails closed.
-- **Bounded recovery**: `discovery-persona-deep-dive-v1` now provides the exact escaped JSON shape, caps the complete response below 12,000 characters, limits findings/gaps/questions, and requires concise entries. If Foundry still returns malformed or schema-invalid JSON, Genie makes exactly one corrective Foundry retry with explicit closure and size instructions, then fails closed. It never invokes a local or static fallback.
-- **Privacy-safe diagnostics**: schema failures report only field paths and validation messages, never rejected response values or customer evidence. Regression coverage verifies extra-metadata compatibility, truncated-response recovery, the two-attempt ceiling, selector-state restoration, prompt limits, and privacy-safe error details.
-- **Intelligence summary**: the same Foundry deep dive now chooses one to five decision-relevant themes and writes a concise, attributable synthesis for each with evidence references. Section 3 renders those thematic narratives instead of exposing every finding, risk, contradiction, assumption, and gap as repetitive line items; the detailed structured analysis remains available to governance, memory, Q&A, and solution generation.
-
-### 2026-09-12 — Multimodal, evidence-grounded Discovery
-
-- **Production document understanding**: transcript and supporting-document uploads now pass through an injected async service. Production uses Azure Content Understanding GA `2025-11-01` and `prebuilt-documentSearch` through managed identity; local/test mode retains deterministic text/PDF/DOCX extraction only. Unknown binaries, malformed UTF-8, empty analysis results, unsafe poll URLs, Azure failures, and timeouts fail closed as visible upload errors.
-- **Broad but explicit format coverage**: both file pickers advertise the documented PDF, image, Office, OpenDocument, email, EPUB, HTML, Markdown, RTF, structured-text, and plain-text allowlist. Scans and standalone images gain OCR and visual descriptions; the product does not claim semantic extraction of embedded Office images. Encrypted or rights-protected Office containers are detected before Azure submission and fail with instructions to provide an authorized, unprotected PDF or Office copy; Genie never attempts to bypass customer document protection.
-- **Visible ingestion progress**: selected evidence files appear in Discovery immediately. Genie processes them sequentially and labels the active file as uploading and analyzing while the remaining files stay visibly queued; each temporary row is replaced by its durable completed or failed result as processing finishes.
-- **Named-person Discovery**: **Find people** performs only one task: it lists the unique human names explicitly present in customer evidence. It does not infer roles, pain points, confidence, or other profile details before selection. Role archetypes, teams, organizations, products, and hypothetical users are excluded. A compact multiselect lets the user choose one or more personas and **Run Discovery** starts a separate deep dive restricted to statements or authored material attributable to those people, preserving attribution without assigning other participants' content to them. If no person is named, Genie asks for evidence that identifies one instead of inventing a persona.
-- **Opt-in Discovery persistence**: new Discovery cases start with **Save discovery** off. While off, derived Discovery state stays only in the running backend instance, is excluded from the saved-Discovery list, and does not write Discovery artifacts to Shared Collaboration Memory; uploads and mandatory governance traces retain their normal policies. Turning the toggle on promotes the current case to durable storage. Turning it off removes the durable case and its Discovery memory while preserving the active transient workflow; unsaved work can be lost on refresh, restart, or deployment.
-- **Intelligent synthesis contract**: Discovery prompts now synthesize the complete evidence set and explicitly separate facts, risks, contradictions, assumptions, and gaps. Clarification questions prioritize unresolved implementation decisions, while solution options must expose tradeoffs and cite the evidence or approved recommendation behind requirements and architecture decisions.
-- **Production readiness**: startup verifies the configured analyzer is ready and every model alias it requires has a resource default before accepting traffic. `scripts/configure_content_understanding.ps1` provisions/verifies those model deployments and defaults without keys. The existing environment was verified with `gpt-5-mini` plus `text-embedding-3-large`, and a live PNG analysis returned nonempty grounded Markdown.
-
-### 2026-09-12 — Discovery: evidence readiness and file removal
-
-- **Truthful readiness**: Discovery counts only uploads with `completed` ingestion status as ready and sends only those upload IDs to persona analysis. Failed files remain visible with their extraction error so users can diagnose them without treating them as usable evidence.
-- **File-level removal**: every evidence row in Discovery and Uploads now has an accessible remove action. The authenticated DELETE endpoint verifies session ownership and removes both upload metadata and any chunked Cosmos transcript documents.
-- **Derived-state safety**: deleting evidence used by the current Discovery analysis returns the case to evidence gathering and clears personas, questions, proposed solutions, selections, and Build linkage derived from the removed source. The page reloads that durable state immediately; removing evidence that has not been analyzed preserves completed Discovery work.
-- **Verification**: backend repository, API, and state-machine coverage verifies chunk cleanup, record/reference deletion, and derived-state invalidation; frontend component coverage verifies mixed completed/failed readiness, completed-only persona requests, error details, and row removal.
-
-### 2026-09-12 — Discovery: real DOCX extraction
-
-- **Production diagnosis**: correlation ID `bd16a2a4-ca33-4be5-96b1-e8f9e7004136` reached backend revision `gh77` but Foundry rejected persona extraction with HTTP 429. The four inputs were DOCX files; the upload layer only parsed PDF and otherwise UTF-8-decoded bytes, so ZIP-based Word documents were marked completed and several megabytes of binary mojibake were sent to `gpt-5-1`.
-- **Correct extraction**: DOCX uploads are now parsed with `python-docx`; non-empty paragraphs and table rows become clean evidence text. Malformed and text-empty Word documents fail closed as upload failures rather than entering Discovery.
-- **Existing-case safety**: Discovery recognizes legacy DOCX records beginning with the ZIP signature and returns a specific conflict telling the user to start a new Discovery and re-upload. Original DOCX bytes were never persisted, so those lossy legacy records cannot be repaired in place.
-- **Picker contract**: both upload experiences now advertise `.docx` and its standard MIME type alongside text, Markdown, and PDF.
-- **Verification**: focused backend coverage validates DOCX paragraphs, tables, extension/MIME detection, malformed files, empty files, and legacy-record rejection; frontend coverage validates DOCX picker support.
-
-### 2026-09-12 — Discovery: large evidence upload resilience
-
-- **Production diagnosis**: correlation ID `63ea0471-92cd-40a0-aea4-68f6b53803d0` corresponded to a transcript upload that failed with Cosmos DB `RequestEntityTooLarge`; extracted transcript text was embedded in one upload document and could exceed Cosmos DB's 2 MiB item limit.
-- **Lossless storage**: the Cosmos upload repository now persists oversized extracted text in bounded companion documents and transparently reconstructs it for downstream Discovery analysis. Normal and existing inline-text records remain readable.
-- **Bounded API responses**: upload, list, and ingestion-status endpoints now return upload metadata without echoing internal transcript text back to the browser.
-- **Verification**: repository coverage round-trips a multi-megabyte, non-ASCII transcript while asserting every stored document stays below 2 MiB; API coverage verifies transcript text is excluded from responses. The full backend suite passes with 593 tests and Ruff reports no issues.
-
-### 2026-09-11 — Discovery upload usability
-
-- Replaced the detached material button with one visible upload panel that groups material type, a prominent **Choose files** action, empty-state guidance, uploaded filenames/statuses, and the next **Find personas** action.
-- The picker accepts multiple files in one selection and uploads them sequentially through the existing authenticated upload API before refreshing the durable evidence list.
-- Component coverage verifies that the upload action is discoverable and that selecting two files produces two real multipart upload requests.
-- Gave the Fluent material-type dropdown a dedicated track at least as wide as the control's intrinsic geometry, removed the adjacent duplicate document icon, and stack the upload controls at narrower shell widths so guidance remains readable without overlap.
-- Added an accessible delete action beside **Resume** for each saved Discovery; successful deletion removes the case from the landing list immediately and failures remain visible to the user.
-
-### 2026-09-11 — Discovery: complete persona-to-prototype experience
-
-- **Durable domain**: added strongly typed Discovery case state for source/analyzed uploads, revision tracking, personas, persona-scoped findings, gap analysis, consent-aware Q&A, priced solution options, structured Azure architecture graphs, selected solution, and eventual Build handoff.
-- **Persistence**: production uses the existing managed-identity Cosmos document store with a dedicated logical `discovery-cases` partition and `discovery-case` record type. Local development and tests use an isolated in-memory repository. Discovery cases survive backend restarts without provisioning another physical Cosmos container.
-- **Foundry state machine**: authenticated transition APIs now run persona extraction and deep analysis through `requirements-analyst`, and consented recommendations plus probable-solution generation through `architecture-designer`. Strict JSON schemas, ordered durable states, revision-safe reanalysis, and retryable failure states fail closed on malformed agent output or invalid transitions.
-- **Consent and governance**: skipped questions first become `recommendation_offered`; no recommendation is generated until the user explicitly accepts. Persona, gap/Q&A, and solution artifacts are revisioned in Shared Collaboration Memory with normal policy and governance events. Deleting an abandoned case performs a governed, prefix-scoped cascade without touching unrelated session memory.
-- **Real pricing and diagrams**: pricing assumptions are resolved against the public Azure Retail Prices API, with partial/unavailable coverage shown when records cannot be verified and no synthetic fallback. Architecture options render in React Flow using a local allowlist copied from Microsoft's official Azure Architecture Icons V24 pack.
-- **Direct Build handoff**: selecting a solution starts `discovery-build-workflow`, which reuses the production Orchestrator and Build Agent with the selected requirements and architecture. Deploy & Launch falls back to those persisted Build inputs, so it does not rerun or forge Requirements/Architecture stages.
-- **Single-page UI**: the Landing page now separates Prototype and Discovery entry points. `/discovery` combines uploads, persona selection, pain points/gaps, batch or interactive Q&A, recommendation consent, solution comparison, pricing evidence, architecture diagrams, resumability, deletion, and prototype handoff in one responsive Fluent UI workspace.
-- **Verification**: focused tests cover repository/API lifecycle, transition ordering, recommendation consent, durable reload, no-fabrication pricing, Shared Memory behavior, Deploy & Launch compatibility, and the progressive frontend state; the full backend suite passes with 591 tests.
-
-### 2026-09-11 — Fidelity launches directly; generated UIs use Impeccable
-
-- **Direct launch sequence**: a Deploy & Launch run proceeds directly from Requirement Validation to Launch. This release originally required the configured evidence threshold; the newer prototype-first behavior documented above supersedes that restriction and launches with visible validation gaps. `run-security-scan` remains a legacy deserialization value for historical persisted runs.
-- **Security posture**: the earlier independent Security Assessment Agent review remains part of build governance. Runtime readiness and black-box acceptance tests still fail closed before launch; this change removes only the redundant post-fidelity static-scan gate from the provisioning sequence.
-- **Professional prototype UI decision**: generated mission UIs follow the [Impeccable](https://impeccable.style/) design methodology. Both Build Agent generation paths and targeted UI regeneration carry the design contract, and every generated frontend pins `impeccable@3.6.0` and runs `impeccable detect MissionApp.tsx src/` before Vite builds it. The newer prototype-first behavior documented above makes detector findings advisory.
-- **Verification**: focused pipeline tests prove that an injected blocking scanner is never called and that the final two steps are Requirement Validation → Launch. Frontend type checking and build verify the displayed mission trace matches the backend order.
-
-### 2026-09-11 — Mission agents use the user's approved model; the Build Agent gets a real model catalog
-
-- **Problem**: `MissionAgentProvisioningService` always provisioned every mission's specialist and orchestrator agents on `settings.default_llm`, silently ignoring whatever model the user actually selected on Genie's own Landing page for that session. Separately, the Build Agent's prompts never received any real Foundry model list, so a mission whose requirements called for a model-selection dropdown could only invent fake, ungrounded model-ID strings (`"gpt-4o-primary"`, `"claude-opus-primary"`) - the exact strings observed live in DerekPoC.
-- **Model threading**: the Landing page's selected model is already recorded on the discovery workflow run as `agent_scope_id = "model:<ref>"` (see `app.api.workflows.run_workflow`). `DeploymentPipelineService` now resolves that value (`_approved_model_deployment_ref`) and forwards it into `MissionAgentProvisioningService.provision(..., model_deployment_ref=...)`, which uses it in place of the platform default for every agent it creates in Foundry. Runs with no selected model (no `model:` scope) fall back to the platform default exactly as before.
-- **Real model catalog for generation**: the `build-solution` workflow step gained a new `available_models` variable, resolved via a new `model-catalog` `variable_sources` kind in `WorkflowStepExecutor` that calls the same `ModelCatalogService` (real ARM-backed Foundry deployment listing) the Landing page's own model picker uses. `build-generation-v1` and `build-generation-component-v1` now receive this real list and are explicitly instructed to populate any generated model-selection UI/config field only from it - and to add no such field at all when no requirement calls for one.
-- **Verification**: added unit tests for the provisioning override (default vs. approved-model), the pipeline's scope-parsing/wiring end to end, and the new `model-catalog` variable resolution (present and absent service). Full backend suite passes with 580 tests; Ruff clean.
-
-### 2026-09-11 — Generated UI submit payloads are structurally flat
-
-- **Incident**: after the upload filename gate was bypassed in the stale DerekPoC deployment, its mission request failed with `Primary strong-model identifier is required (REQ-011)`. Live bundle inspection proved the UI submitted `evaluation_config.primary_model_id`, while the generated orchestrator read the required flat key with `config.get("primary_model_id")`. The field was present, but hidden from the orchestrator by UI-only grouping objects.
-- **Enforced invariant**: build materialization now extracts the object literal serialized and passed directly or through a local variable to the UI's `onSubmit(...)`, parses its top-level entries with balanced brace and quoted-string handling, and rejects submit payloads whose field values are nested objects. Flat payloads, array-valued fields, and unrelated serialized objects elsewhere in the generated component remain valid.
-- **Automatic recovery**: this deterministic failure uses the existing bounded `build-solution` repair path before Foundry or Azure provisioning. The Build Agent receives the exact structural contract violation and must regenerate the UI/orchestrator pair with identical flat keys; exhausted retries fail closed instead of deploying another mismatched prototype.
-- **Verification**: focused tests reproduce the live DerekPoC nested payload and prove an equivalent flat payload materializes successfully. The full backend suite passes with 573 tests.
-
-### 2026-09-11 — Generated upload validation is filename-independent
-
-- **Incident**: DerekPoC parsed an uploaded JSON package successfully and displayed its corpus preview, but kept **Confirm & start run** disabled. Its generated UI compared the end-user-controlled filename to the example `blind_mqm_n30_package.json`, stored the mismatch as a warning, and included any warning in the button's disabled condition. The existing Build Agent prompt already prohibited this exact behavior, proving that a prompt-only rule was insufficient.
-- **Enforced invariant**: build materialization now rejects generated TSX that compares an uploaded file's name to an exact filename-like literal. Legitimate non-file object-name comparisons remain valid. Uploads must be accepted based on content and declared file type, not a sample filename from a requirement document.
-- **Automatic recovery**: deterministic materialization failures enter the existing bounded `build-solution` regeneration path before Foundry agents or Azure prototype infrastructure are provisioned. Genie supplies the precise validation evidence to the Build Agent, retries from provisioning with the repaired build, and fails closed after the configured repair budget instead of deploying an unusable form.
-- **Verification**: focused tests reproduce the exact filename-gated TSX, guard against false positives, and prove the deployment pipeline regenerates the invalid UI and completes from the repaired build.
-
-### 2026-09-11 — End-to-end generated prototype fidelity recovery
-
-- **Incident**: the rebuilt DerekPoC passed APIM runtime readiness and rendered its frontend, but its generated flat request payload did not match the orchestrator contract. The generated backend caught the resulting structured orchestration exception and returned conversational fallback text as HTTP 200, so the broken mission path looked successful. Its deployed acceptance tests then collected zero tests because a relative workspace path was appended twice. After that fidelity failure, automatic repair could not resume `build-solution`: durable workflow step outputs had survived the Genie rollout, but their required Shared Collaboration Memory records had not.
-- **Fail-closed mission contract**: generated React and orchestrator prompts now require the same exact flat JSON payload. Structured mission requests propagate orchestration errors as failed HTTP responses; conversational fallback remains available only for explicit plain-text chat. Acceptance-test contracts require the exact deployed UI payload and mission-specific assertions rather than accepting any nonempty HTTP 200 response.
-- **Deterministic test and repair recovery**: test execution resolves its workspace root before materializing and invoking pytest, preventing relative paths from being duplicated. Before an automatic fidelity repair, Genie restores only missing `analyze-requirements` and `design-architecture` Shared Memory keys from their completed durable workflow step results. Those writes use the Genie Orchestrator identity, approved lineage, evidence references, policy enforcement, and normal governance events; existing memory is never overwritten and an absent durable output fails the repair closed.
-- **Verification**: focused materializer, prompt-contract, test-execution, and deployment-pipeline tests cover structured failure propagation, exact schema parity, production-relative pytest paths, and governed memory restoration before repair resume.
-
-### 2026-09-11 — Generated prototype runtime readiness gate
-
-- **Incident**: DerekPoC provisioned successfully but its first mission request returned no result. The generated orchestrator constructed Agent Framework's `FoundryAgent` with an invalid positional argument; provisioning and basic HTTP health checks therefore reported success even though the generated application could not initialize.
-- **Deterministic runtime**: Genie now owns the Foundry SDK boundary in `mission_foundry_runtime.py`. Generated mission code uses `MissionFoundryAgent`, while materialization rewrites legacy direct imports to that adapter. The adapter resolves the latest provisioned agent version, uses keyword-only SDK construction, serializes typed payloads, and returns dictionary-compatible results. Build Agent contracts prohibit generated raw SDK construction.
-- **Fail-closed launch**: generated `/health/ready` imports and constructs the real orchestrator, and backend deployment polls that endpoint through the prototype's dedicated APIM gateway. A missing endpoint, incompatible generated constructor, adapter import error, or non-success response now stops deployment before frontend launch rather than publishing a nonfunctional prototype. Existing black-box acceptance tests then exercise the deployed backend and frontend before the prototype is marked complete.
-- **Verification**: deploy-launch tests execute the emitted adapter against SDK-compatible fakes, validate generated import normalization and orchestrator readiness, and require backend deployment to pass the gateway readiness check.
-
-### 2026-09-11 — Valid public prototype Container Apps environment payload
-
-- **Incident**: DerekPoC deployment `80f64d5a` successfully provisioned its mission identity, Foundry agents, private backend environment, APIM, and backend Container App, then failed at `deploy-frontend-app`. `azure-mgmt-appcontainers` flattened an otherwise empty `ManagedEnvironment` model to only `location` and `tags`, while the Azure control plane requires every managed-environment request body to contain `properties`.
-- **Fix**: public prototype environments now explicitly set `zone_redundant=False`. This preserves the intended single-region Consumption environment while forcing the typed SDK model to serialize `properties: { zoneRedundant: false }`; private backend environments already serialize a populated `properties.vnetConfiguration` object.
-- **Verification**: the focused deployment-service suite asserts the exact payload produced by the installed Azure SDK serializer, preventing a future model or SDK refactor from silently dropping `properties`. The failed partial deployment is cleaned through Genie's owned prototype cleanup path before a fresh retry.
-
-### 2026-09-11 — Durable workflow checkpoints across backend rollouts
-
-- **Incident**: a corrected prototype deployment rollout restarted Genie after DerekPoC's approved requirements, architecture, and generated build had completed. Deployment-run inventory rehydrated from Cosmos, but the source `WorkflowRunResult` still used `InMemoryWorkflowRunRepository`; the next fresh Deploy & Launch run therefore failed at `generate-access-policy` with `No workflow run ... found.` before provisioning resources.
-- **Fix**: production now injects `CosmosWorkflowRunRepository` and `CosmosUploadRepository` through the existing managed-identity `CosmosDocumentStore`. Every workflow wave already called the repository checkpoint hook, so no orchestration behavior changed; complete step-result snapshots, upload metadata, and extracted transcript/document text now survive process and revision restarts and remain queryable by run id or session.
-- **Verification**: focused Cosmos repository tests recreate repository instances to simulate a backend restart, then verify exact typed workflow recovery and exact upload-text recovery through both direct lookup and session listing. Local development and tests continue to use the in-memory repositories unless `GENIE_MEMORY_STORE_BACKEND=cosmos_db` is configured.
-
-### 2026-09-11 — Private Genie backend behind platform API Management
-
-- **Network boundary**: Standard v2 APIM remains the anonymous public API edge, while outbound VNet integration resolves the existing Container App FQDN through a Container Apps environment private endpoint and `privatelink.eastus2.azurecontainerapps.io`. Environment public network access is disabled after the gateway route is proven.
-- **Fail-closed cutover**: `deploy_platform_gateway.ps1` verifies APIM and prepares private DNS before changing public access, then disables public access through the `2025-10-02-preview` managed-environment ARM API before creating the private endpoint as required by Azure. This pinned ARM PATCH exposes `publicNetworkAccess` without depending on the preview Container Apps CLI flag, which is unavailable on some hosted runners. The script retries Azure's transient `ManagedEnvironmentNotHealthy` endpoint response, preserves an existing succeeded endpoint rather than resetting its connection state, normalizes the Azure CLI private-endpoint response shape when checking approval, and resumes a closed-but-incomplete cutover before its next APIM probe. Rejected or disconnected endpoints still fail immediately. It verifies APIM again after cutover and fails if direct Container Apps ingress still returns a successful response. An endpoint failure leaves public ingress disabled. `deploy_backend.ps1` verifies every revision only through APIM and refuses an environment whose public access is enabled.
-- **CI and least privilege**: `prepare-gateway` emits the verified APIM URL directly to the frontend build; only after that deployment does `deploy-backend` finalize the private-network cutover, avoiding an outage against the old direct-backend bundle. The GitHub OIDC principal receives the resource-group-scoped `Genie Platform Gateway Deployer` custom role, including the VNet join action required by private DNS links, with no delete or RBAC-management actions.
-- **Infrastructure and tests**: foundational Bicep reserves a `/24` NSG-associated subnet delegated to `Microsoft.Web/serverFarms`; the platform template owns APIM, anonymous proxy operations/policy, private DNS, and private endpoint resources. Focused deployment-contract tests and Bicep/PowerShell syntax checks protect the topology and cutover ordering.
-
-### 2026-09-10 — Anonymous Genie control plane and direct FastAPI ingress
-
-- **No interactive authentication**: removed MSAL, the Entra token validator, bearer headers, app-registration configuration, the .NET MISE project, its private package-feed dependency, and all associated CI jobs. Genie opens directly and generated prototypes remain anonymous.
-- **Shared identity semantics**: every request receives the fixed `genie-internal-user` principal with `Genie.Admin`; caller headers cannot influence identity. Session ownership, governance attribution, prototype inventory, and cleanup authority are shared across all callers.
-- **Direct backend rollout**: `deploy_backend.ps1` atomically removes retired gateway containers and auth settings, deploys the commit-pinned FastAPI image, configures exact-origin CORS and health probes, moves ingress to port `8000`, waits for the exact ready revision, and verifies anonymous API access.
-- **Deployment hardening**: the first CI attempt built and pushed the backend image but stopped before its ARM patch because the existing container JSON omitted the optional `probes` property. The script now adds or replaces that property explicitly, so both legacy containers without probes and later revisions with probes follow the same atomic path.
-- **Workload identity retained**: the Container App's user-assigned managed identity and least-privilege RBAC remain the production path to Cosmos DB, Foundry, Azure management, ACR, and other Azure services. CORS is not authentication; the public Genie API URL is intentionally callable outside a browser.
-
-### 2026-09-10 — Anonymous prototypes behind dedicated API gateways
-
-This prototype-only change was extended later the same day by [Anonymous Genie control plane and direct FastAPI ingress](#2026-09-10--anonymous-genie-control-plane-and-direct-fastapi-ingress). The details below remain as deployment history.
-
-- **Authentication boundary**: Genie itself remains protected by corporate Microsoft Entra ID and its MISE gateway. Newly generated prototype frontends and APIs no longer provision, configure, or require Entra applications, MSAL, bearer tokens, shared callback slots, or acceptance keys.
-- **Private backend**: each prototype still owns a dedicated Standard v2 APIM service, VNet, private DNS zone, and internal Container Apps environment. Generated FastAPI ingress remains private; APIM is the only public API endpoint.
-- **Gateway policy and tests**: APIM retains exact-origin CORS, per-client rate limiting, correlation IDs, and private forwarding. Acceptance tests call the APIM URL directly without credentials. Exact-origin CORS protects browser use but does not authenticate non-browser callers.
-- **Deployment cleanup**: CI no longer requires shared-prototype Entra variables. At this point the rollout still preserved Genie's corporate Entra and MISE settings; the later entry removes them.
-
-### 2026-09-10 — Superseded: acceptance testing across APIM and tenant isolation
-
-This intermediate authenticated-prototype design was replaced the same day by [Anonymous prototypes behind dedicated API gateways](#2026-09-10--anonymous-prototypes-behind-dedicated-api-gateways). The details below remain as deployment history and are not current behavior.
-
-- **Root cause**: production uses a corporate-tenant shared prototype audience while Genie's Azure managed identity belongs to the subscription tenant. The old shared-auth test branch bypassed authentication through a replica-local MISE port; dedicated APIM removed that endpoint, and the managed identity cannot receive an app role from the other tenant.
-- **Fix**: each protected deployment now generates a 256-bit acceptance key, stores it as a Container App secret and APIM secret named value, and passes it only through Genie's trusted loopback proxy. Generated pytest receives only the loopback URL. APIM strips spoofed internal headers, validates the key, removes it before private forwarding, and FastAPI compares APIM's proof using constant-time comparison. Normal browser traffic continues to require corporate Entra validation at both APIM and FastAPI.
-- **Lifecycle**: the in-memory key is removed before pytest starts; APIM and Container App copies disappear with the prototype resource group. Missing keys fail the launch before acceptance tests run.
-
-### 2026-09-10 — Dedicated API gateway and private backend per prototype
-
-- **Isolation**: every new prototype provisions a dedicated Standard v2 Azure API Management service, VNet, private DNS zone, and internal Container Apps environment in its own resource group. Generated FastAPI has no public ingress; browser and acceptance-test traffic reaches it only through APIM.
-- **Security**: APIM validates the corporate Entra tenant and audience, enforces exact-origin CORS and per-client rate limiting, and forwards the token for FastAPI defense-in-depth validation. Generated prototypes no longer deploy or configure a MISE sidecar.
-- **Lifecycle**: deterministic resource names make retries idempotent, while existing owner/admin abandonment deletes external Foundry and identity artifacts before deleting the prototype resource group and all gateway/network/runtime resources together.
-- **Deployment**: CI passes externally configured APIM publisher metadata to Genie and removes legacy prototype-MISE environment variables. The long-lived Genie control plane continues to use its existing MISE gateway.
-
-### 2026-09-10 — Retire the detached legacy Container App
-
-- **Cleanup**: removed the legacy `genie-backend` Container App and its two revisions after the corporate/private-network cutover. Its logs contained only platform health probes; its latest revision could not access private Cosmos and was unhealthy.
-- **Current deployment**: `genie-backend-corporate` is the sole Genie Container App. The deployed frontend bundle and GitHub Actions variables both target its `proudtree-6b064653.eastus2.azurecontainerapps.io` endpoint, and its single `gh45` revision was healthy with 100% traffic before retirement.
-- **Preserved dependencies**: the shared managed identity, ACR, legacy Container Apps environment, and current private environment were not deleted. Removing the old app therefore does not remove credentials, images, networking, or resources used by the corporate deployment.
-
-### 2026-09-09 — Fix corporate Entra discovery after private-network cutover
-
-- **Incident**: authenticated frontend requests such as `GET /models/available` returned `503` because the deployment script configured `GENIE_ENTRA_AUTHORITY` with a tenant `/v2.0` path while `EntraTokenValidator` independently appended that same path.
-- **Fix**: deployments now configure the host-only `https://login.microsoftonline.com` authority. The validator rejects authorities containing tenant, version, query, or fragment components so this configuration error fails during startup instead of surfacing after sign-in.
-
-### 2026-09-09 — Corporate workforce identity and durable prototype ownership
-
-- **Corporate access**: Genie now targets Microsoft corporate tenant `72f988bf-86f1-41af-91ab-2d7cd011db47`; a real delegated token was verified for the expected audience/scope with canonical user identity and `Genie.Admin`. GitHub's Azure deployment tenant remains separate.
-- **Ownership and administration**: sessions and deployment runs use canonical `<tid>:<oid>` ownership. Cosmos persists the global prototype inventory; owner routes stay owner-scoped, and `Genie.Admin` can list and clean all prototypes.
-- **Lifecycle and isolation**: each prototype gets a tagged resource group, 7-day TTL, three-active-prototype owner quota, hourly cleanup reconciliation, and durable retryable cleanup state. Interrupted runs fail closed on restart.
-- **Shared prototype authentication**: new prototypes reuse one corporate Entra registration and a bounded pool of 50 pre-registered frontend callbacks. Each owns its API gateway and exact CORS origin. Generated acceptance tests receive no bearer token, and public FastAPI exposure remains blocked.
-- **Legacy retirement**: the pre-cutover directory inventory found zero legacy `Genie Prototype - *` registrations. Existing prototype Container Apps are not modified by the auth cutover and can age out through normal cleanup.
-- **Derek POC retirement**: removed all 82 `derekpoc-*` Foundry agents, four Container Apps, four ACR repositories, two managed identities, and their two Foundry role assignments. Post-cleanup inventories found no Derek resources, images, agents, app registrations, or service principals.
-- **Deployment**: CI now configures corporate frontend/gateway/backend identity together, enables managed-identity Cosmos persistence, and no longer conflates application sign-in tenant with GitHub OIDC tenant. Frontend deployment waits for the backend rollout to become ready, preventing a partial identity cutover.
-- **Cosmos networking**: Cosmos keeps local authentication and public network access disabled. The VNet-injected environment uses a dedicated Cosmos private endpoint and `privatelink.documents.azure.com` private DNS zone. Its `genie-backend-corporate` app passed gateway readiness, unauthenticated-rejection, and private Cosmos checks; CI/CD now targets that app and releases the corporate frontend only after its backend revision is ready.
-
-### 2026-09-03 — Azure architecture and usage boundary
-
-- **Documentation**: replaced Mermaid diagrams with professional, renderer-independent architecture images built from the official Microsoft Azure Architecture Icons. The diagrams separate the Genie control plane from each generated prototype and cover Static Web Apps, Container Apps, MISE, Entra ID, managed identity/RBAC, Foundry, Azure data services, ACR, and Azure Monitor.
-- **Usage boundary**: added a prominent **Microsoft Confidential — Internal Collaboration Only** notice. Genie is an art-of-the-possible rapid-prototyping environment and must not be deployed directly to production without independent security, privacy, Responsible AI, accessibility, data-governance, resilience, and operational-readiness reviews.
-
-### 2026-09-03 — Independent MISE gateway for every generated prototype
-
-- **What changed**: Deploy & Launch now creates one owned Entra API/SPA registration and one independently configured MISE gateway container for each new prototype. Public backend ingress targets that gateway on `8080`; generated FastAPI remains private on `8000` and validates the same unique audience as defense in depth.
-- **Browser and test authentication**: generated Vite shells use MSAL redirect login, the prototype's `access_as_user` scope, bearer forwarding, and silent refresh. A trusted loopback proxy owns the short-lived `Prototype.Invoke` app token and injects it only while forwarding to the fixed prototype backend; generated pytest code receives no bearer token.
-- **Fail-closed lifecycle**: the backend starts only when the pinned gateway image, tenant, and managed-identity test principal are configured. Entra app creation, service-principal creation, app-role assignment, mission-identity ACR pull configuration, SPA redirect finalization, exact-origin CORS revision, and token acquisition all fail the deployment rather than exposing FastAPI or selecting a local fallback. Failed runs retain the complete protected boundary for retry; explicit owner-authorized abandonment removes runtime resources, RBAC assignments, the mission identity, and the Entra application in dependency order.
-- **Deployment**: CI/CD passes the already-built commit-pinned gateway image into Genie's runtime through `scripts/deploy_authentication_gateway.ps1`; no manual application deploy is used. The runtime managed identity requires tenant-admin-consented Graph application permissions documented in [Authentication](#authentication).
-- **Operational verification**: the implementation and fail-closed tests are complete, but this environment's Graph application permissions and tenant-admin consent remain unverified until a real Deploy & Launch run successfully provisions its prototype registration, service principal, and role assignment.
-
-### 2026-09-02 — Impeccable design contract for generated prototype frontends
-
-- **What changed**: the Architecture Designer now shapes a domain-specific surface mode and visual direction using the method from [Impeccable](https://impeccable.style/); initial UI generation, component generation, and Workshop UI regeneration all enforce the same anti-slop, responsive, accessible design contract.
-- **Fail-closed design check**: every materialized prototype frontend pins `impeccable` `3.6.0` and runs `impeccable detect MissionApp.tsx src/` before Vite. The generated frontend image now builds on Node 22 to satisfy the CLI runtime requirement. A deterministic finding exits with code 2 and prevents deployment. The generated scaffold's Vite pin moves from vulnerable `6.0.7` to npm's non-major fixed release `6.4.3`.
-- **Shell quality**: removed nested mission-input cards and replaced bounce motion with a restrained loading cadence. The exact generated shell templates pass the real Impeccable detector with zero findings.
-- **Scope**: this affects newly generated or regenerated prototypes and future Deploy & Launch runs. It does not retroactively redesign already-deployed prototype source.
-
-### 2026-08-31 — MISE authentication gateway and private FastAPI ingress
-
-- **What changed**: added a .NET 8 ASP.NET Core gateway using `Microsoft.Identity.ServiceEssentials.AspNetCore` `2.5.3` and YARP, host-level authentication/CORS/readiness tests, and an atomic Container App rollout that deploys one gateway per replica and moves external ingress from FastAPI port `8000` to gateway port `8080`. FastAPI retains its existing Entra token validation as defense in depth.
-- **Security boundary**: liveness/readiness and configured browser preflight are anonymous; every API request requires a valid user or application access token for the configured Genie API audience. The Entra registration now emits `idtyp` for delegated tokens, and the original bearer token is forwarded to FastAPI. MISE feed credentials are supplied only through GitHub Actions secrets and ACR secret build arguments.
-- **Deployment**: CI/CD builds both commit-pinned images and applies them with `scripts/deploy_authentication_gateway.ps1`. `AZURE_DEVOPS_TOKEN` is configured with MicrosoftIT Packaging Read access; authenticated MISE restore, gateway build/tests, and both ACR image builds passed. Rollout failures remained fail-closed before changing ingress: Linux PowerShell required `[System.IO.Path]::GetTempPath()`, and ARM rejected the unsupported legacy `imageType` container property, which has been removed.
-- **Post-deploy evidence**: record the ready revision, UTC authenticated-request window, correlation ID, response status, and MCAPS SFI telemetry confirmation in `docs/MISE_SFI_VERIFICATION.md`.
-
-### 2026-08-21 — Requirement Fidelity Gate: fix false "no JUnit result" for parametrized acceptance tests
-
-- **What changed**: `backend/app/services/requirement_fidelity_service.py` (`record_fidelity_execution`) now matches an expected acceptance-test name against pytest's JUnit XML output by exact name **or** any `name[param]`-bracketed instance of it, instead of exact string equality only.
-- **Root cause**: pytest always reports a `@pytest.mark.parametrize`-decorated test's real JUnit case name as `"<def name>[<param id>]"`, never the bare `def` name alone. Any requirement whose generated acceptance test used `parametrize` (a natural way to test "cover N languages/items") always showed `"no JUnit result"` evidence in the Requirement Fidelity Gate, even when every parametrized case actually passed — an unrecoverable false failure loop.
-- **Tests**: new regression test `test_parametrized_test_case_names_are_matched_to_their_bare_def_name` (`backend/tests/unit/services/test_requirement_fidelity_service.py`); full backend suite (515 tests) + ruff clean.
-- **Deployed via**: CI/CD (`.github/workflows/ci.yml`) on push to `master` — no manual `az acr build`/`az containerapp update` needed.
-
-### 2026-08-21 — Requirement fidelity: fix dropped-leading-zero test name matching for Generate Requirement Acceptance Tests
-
-- **What changed**: `backend/app/services/requirement_fidelity_service.py` (`_test_names_for_requirement`) now matches a generated test's function name against a requirement id with a digit-boundary-aware, leading-zero-tolerant regex (`_requirement_name_pattern`) instead of a plain substring check.
-- **Root cause**: the Test Generation Agent occasionally writes a test function name that drops a requirement id's leading zero(s) — e.g. `test_req_16_...` for `REQ-016` — which a plain `"req_016" in name` substring check never matches, permanently reporting that requirement as having no executable acceptance test (`generate-test-suite` step failure: "Generated test suite does not cover every approved requirement"). The old substring check was also unsafe in the other direction — it could wrongly match `REQ-016` against a test written for an unrelated id like `REQ-0160`.
-- **Tests**: new regression tests `test_test_name_matching_tolerates_a_dropped_leading_zero` and `test_test_name_matching_does_not_collide_with_a_similar_numeric_id` (`backend/tests/unit/services/test_requirement_fidelity_service.py`); full backend suite (517 tests) + ruff clean.
-- **Deployed via**: CI/CD (`.github/workflows/ci.yml`) on push to `master` — no manual `az acr build`/`az containerapp update` needed.
-
-### 2026-08-22 — Requirement fidelity: replace fragile name-based coverage matching with an explicit `# REQ-xxx` tag comment
-
-- **What changed**: this is the second real bug in two days in the same "map a generated test back to a requirement id" logic (the earlier parametrize-bracket bug, then the dropped-leading-zero bug). Rather than another narrow regex patch, `backend/app/services/requirement_fidelity_service.py` adds `_tagged_test_names`, a new *primary* coverage signal: a `# REQ-xxx` comment directly above a test function (blank lines and decorator lines like `@pytest.mark.parametrize(...)` may sit between the comment and the `def`; any other line clears a pending tag). The Test Generation Agent only has to copy the id verbatim from the requirements it was already given — never transform it into a valid, zero-padded Python identifier, which is exactly what kept going wrong. The old name-based regex (`_requirement_name_pattern`) is kept as a secondary fallback for tests that don't carry a tag. `config/prompts/registry.yaml`'s `test-generation-v1` prompt (bumped to version `1.7.0`) now requires this tag comment on every generated test, in addition to (not instead of) naming the function after the requirement.
-- **Tests**: new regression tests `test_tag_comment_covers_a_requirement_regardless_of_function_name`, `test_tag_comment_survives_blank_lines_and_decorators_but_not_other_code`, `test_one_tag_comment_block_covers_multiple_requirement_ids`; updated `test_comment_only_requirement_mention_is_not_executable_coverage` to test a true narrative in-body mention (which still correctly does not count) rather than a tag directly above a `def` (which now correctly does). Full backend suite (520 tests) + ruff clean.
-- **Deployed via**: CI/CD (`.github/workflows/ci.yml`) on push to `master` — no manual `az acr build`/`az containerapp update` needed.
-
-### 2026-08-24 — Requirement Fidelity Gate: fix every requirement wrongly reporting "no JUnit result" when the real test run times out
-
-- **What changed**: this is a fourth, previously-unaddressed bug in the Requirement Fidelity Gate — but unlike the three prior fixes (all about matching a generated test's *name* back to a requirement id), this one is about the pytest subprocess never finishing at all. `backend/app/deploy_launch/test_execution_service.py`'s hardcoded 120s subprocess timeout was too short for the gate's *real* black-box acceptance tests — genuine HTTP calls against a live deployed mission prototype, one test per approved requirement, which can easily take several minutes for a mission with dozens of requirements. On timeout, the pytest process is killed before it can write any JUnit XML, so every requirement's expected test name is "unobserved" — previously reported as "no JUnit result: `<test name>`" for every single requirement, which reads exactly like the test-name-matching bugs already fixed and sent debugging in the wrong direction. Fixed by (1) making the timeout a real, externalized setting — `GENIE_DEPLOYMENT_TEST_EXECUTION_TIMEOUT_SECONDS` (`Settings.deployment_test_execution_timeout_seconds`, default `300`, up from the old hardcoded `120`) — instead of a hardcoded constant, and (2) adding a `TestExecutionResult.timed_out` flag that `record_fidelity_execution` (`backend/app/services/requirement_fidelity_service.py`) uses to report a clear, honest "Test execution did not finish: `<summary>`" evidence string instead of a misleading per-requirement "no JUnit result".
-- **Tests**: `test_run_tests_times_out_on_a_hanging_generated_test` now also asserts `result.timed_out is True`; new regression test `test_execution_incomplete_reports_a_timeout_not_a_name_mismatch_for_every_requirement` (`backend/tests/unit/services/test_requirement_fidelity_service.py`). Full backend suite (523 tests) + ruff clean.
-- **Deployed via**: CI/CD (`.github/workflows/ci.yml`) on push to `master` — no manual `az acr build`/`az containerapp update` needed.
+---
 
 ## Known gaps / next phases
 

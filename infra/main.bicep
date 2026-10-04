@@ -46,6 +46,20 @@ param apiManagementSubnetPrefix string = '10.20.4.0/24'
 @maxLength(8)
 param resourcePrefix string = 'genie'
 
+@description('Model deployments to create on the Azure AI Foundry account as part of this deployment. Each item needs: name (the deployment name agents reference, e.g. config/agents/registry.yaml model_deployment_ref), model, version, and optionally format/skuName/skuCapacity. Leave empty to skip and deploy models manually afterward.')
+param foundryModelDeployments array = []
+
+@description('Deploy an Azure Container Registry and a bootstrap backend Container App as part of this same template - recommended so a brand-new, empty subscription ends up with a real (if not-yet-configured) Container App resource that scripts/deploy_backend.ps1 can then roll the real image onto. Set to false if you already have your own registry/app.')
+param deployContainerRegistryAndBackendApp bool = true
+
+@description('Azure Container Registry SKU.')
+@allowed([
+  'Basic'
+  'Standard'
+  'Premium'
+])
+param containerRegistrySkuName string = 'Basic'
+
 // Deterministic, collision-resistant suffix derived from the subscription
 // and environment name - never a hardcoded/customer-specific value.
 var resourceToken = uniqueString(subscription().id, environmentName, location)
@@ -73,6 +87,9 @@ module foundationalResources 'modules/foundational-resources.bicep' = {
     containerAppsInfrastructureSubnetPrefix: containerAppsInfrastructureSubnetPrefix
     privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
     apiManagementSubnetPrefix: apiManagementSubnetPrefix
+    foundryModelDeployments: foundryModelDeployments
+    deployContainerRegistryAndBackendApp: deployContainerRegistryAndBackendApp
+    containerRegistrySkuName: containerRegistrySkuName
     tags: tags
   }
 }
@@ -86,12 +103,23 @@ module prototypeGatewayRbac 'modules/prototype-gateway-rbac.bicep' = {
 
 output resourceGroupName string = resourceGroup.name
 output managedIdentityPrincipalId string = foundationalResources.outputs.managedIdentityPrincipalId
+output managedIdentityClientId string = foundationalResources.outputs.managedIdentityClientId
 output keyVaultUri string = foundationalResources.outputs.keyVaultUri
+output keyVaultName string = foundationalResources.outputs.keyVaultName
 output storageAccountName string = foundationalResources.outputs.storageAccountName
 output aiSearchEndpoint string = foundationalResources.outputs.aiSearchEndpoint
 output cosmosDbEndpoint string = foundationalResources.outputs.cosmosDbEndpoint
 output aiFoundryEndpoint string = foundationalResources.outputs.aiFoundryEndpoint
+output aiFoundryAccountName string = foundationalResources.outputs.aiFoundryAccountName
+output aiFoundryProjectName string = foundationalResources.outputs.aiFoundryProjectName
 output containerAppsEnvironmentId string = foundationalResources.outputs.containerAppsEnvironmentId
+output containerAppsEnvironmentName string = foundationalResources.outputs.containerAppsEnvironmentName
 output staticWebAppDefaultHostname string = foundationalResources.outputs.staticWebAppDefaultHostname
+output staticWebAppName string = foundationalResources.outputs.staticWebAppName
 output applicationInsightsConnectionString string = foundationalResources.outputs.applicationInsightsConnectionString
 output logAnalyticsWorkspaceId string = foundationalResources.outputs.logAnalyticsWorkspaceId
+output containerRegistryName string = foundationalResources.outputs.containerRegistryName
+output containerRegistryLoginServer string = foundationalResources.outputs.containerRegistryLoginServer
+output backendContainerAppName string = foundationalResources.outputs.backendContainerAppName
+output backendContainerAppFqdn string = foundationalResources.outputs.backendContainerAppFqdn
+
