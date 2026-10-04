@@ -633,17 +633,22 @@ export function DeployLaunchPage(): JSX.Element {
   );
 
   // Drives both the activity banner and the optimistic "next step is
-  // running" override below. Deliberately also covers the pre-run window -
-  // `runs` has loaded but no run exists yet - because the page auto-starts
-  // the pipeline in that exact state (see the auto-start effect above), and
-  // `starting` is only true while the POST itself is in flight. Without
-  // that third clause the page falls back to a silent wall of "Not Started"
-  // twice: once before the auto-start effect fires, and again between
-  // `handleStart` clearing `starting` and the `refresh()` result landing.
+  // running" override below. Real bug found via live testing: this used to
+  // also treat "runs has loaded but no active run exists yet" as "active",
+  // on the mistaken assumption that an auto-start effect would kick off a
+  // real deploy-launch run moments after this page mounted. No such effect
+  // exists (Deploy & Launch is a deliberate, governed, human-gated action -
+  // see the "Non-production release approval" card below) - so that extra
+  // clause made the page show "Genie is working on this... this can take a
+  // minute" and a step-by-step "In Progress" animation FOREVER, even though
+  // nothing had actually been requested yet, because the user had not yet
+  // clicked "Request release approval" -> "Approve" -> "Start approved
+  // deployment". Only a genuine in-flight start() call or an actually
+  // running backend run counts as "active" now.
   const isPipelineActive =
     !startError &&
     activeRun?.status !== "failed" &&
-    (starting || activeRun?.status === "running" || (!!runs && !activeRun));
+    (starting || activeRun?.status === "running");
 
   // Deploy & Launch's own `start()` first self-heals any not-yet-finished
   // upstream workflow step (e.g. build-solution resumed because Workshop's

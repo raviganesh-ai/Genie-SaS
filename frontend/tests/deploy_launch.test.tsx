@@ -130,6 +130,26 @@ describe("DeployLaunchPage", () => {
     expect(screen.queryByText("Generate Requirement Acceptance Tests")).not.toBeInTheDocument();
     expect(screen.getAllByText("Not Started").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /Request release approval/i })).toBeInTheDocument();
+
+    // Real bug found via live testing: before any run exists and before
+    // the human has clicked anything, `isPipelineActive` used to also be
+    // (incorrectly) true just because the (empty) run list had finished
+    // loading - on the mistaken assumption that an auto-start effect would
+    // create a real run moments later. No such effect exists (this is a
+    // deliberately human-gated action - see the test above), so that made
+    // step 1 permanently show "In Progress…" and the "Genie is working
+    // with the Orchestrator..." activity banner render forever, even
+    // though nothing had been requested - exactly what a user reported as
+    // "shows agentic flow, but the output is empty" (they waited on a
+    // banner that could never resolve, because no pipeline run was ever
+    // actually started). None of that may render before a real start.
+    expect(screen.queryByText("In Progress…")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Genie is working with the Orchestrator to get your deployment started/i),
+    ).not.toBeInTheDocument();
+    const accessPolicyRow = screen.getByText("Generate Access Policy & Least Access").closest("div")
+      ?.parentElement as HTMLElement;
+    expect(within(accessPolicyRow).getByText("Not Started")).toBeInTheDocument();
   });
 
   it("shows step progress for an in-flight pipeline run", async () => {
