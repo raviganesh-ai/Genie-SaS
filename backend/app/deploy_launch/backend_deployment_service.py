@@ -130,6 +130,7 @@ class BackendDeploymentService:
         location: str,
         foundry_endpoint: str,
         foundry_project_name: str,
+        foundry_resource_group: str | None = None,
         prototype_api_gateway_service: PrototypeApiGatewayService | None = None,
     ) -> None:
         self._subscription_id = subscription_id
@@ -139,6 +140,16 @@ class BackendDeploymentService:
         self._location = location
         self._foundry_endpoint = foundry_endpoint
         self._foundry_project_name = foundry_project_name
+        # The Foundry account may live in a different resource group than
+        # where Deploy & Launch provisions new customer deployments (e.g. a
+        # dedicated environment reusing an existing Foundry project) - see
+        # Settings.azure_foundry_resource_group and the identical fallback
+        # pattern in app.services.model_catalog_service. Real bug found via
+        # live testing: this previously always granted the mission identity
+        # Foundry access scoped to `resource_group` (the deployment
+        # resource group), which fails closed with ResourceNotFound in any
+        # environment where the Foundry account actually lives elsewhere.
+        self._foundry_resource_group = foundry_resource_group or resource_group
         self._prototype_api_gateway_service = prototype_api_gateway_service
 
     def _acr_client(self) -> Any:
@@ -263,7 +274,7 @@ class BackendDeploymentService:
             if not foundry_account_name or not identity.principal_id or not identity.client_id:
                 raise BackendDeploymentError("Mission identity or Foundry account could not be resolved.")
             foundry_scope = (
-                f"/subscriptions/{self._subscription_id}/resourceGroups/{self._resource_group}"
+                f"/subscriptions/{self._subscription_id}/resourceGroups/{self._foundry_resource_group}"
                 f"/providers/Microsoft.CognitiveServices/accounts/{foundry_account_name}"
             )
             assignment_id = str(uuid5(NAMESPACE_URL, f"{foundry_scope}:{identity.principal_id}:{_COGNITIVE_SERVICES_USER_ROLE_ID}"))
@@ -674,6 +685,7 @@ def create_backend_deployment_service(
         location=settings.deployment_location,  # type: ignore[arg-type]
         foundry_endpoint=settings.azure_foundry_endpoint,  # type: ignore[arg-type]
         foundry_project_name=settings.azure_foundry_project_name,  # type: ignore[arg-type]
+        foundry_resource_group=settings.azure_foundry_resource_group,
         prototype_api_gateway_service=(
             PrototypeApiGatewayService(
                 subscription_id=settings.azure_subscription_id,  # type: ignore[arg-type]

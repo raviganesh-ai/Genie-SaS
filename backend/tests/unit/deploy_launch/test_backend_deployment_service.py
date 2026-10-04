@@ -129,10 +129,121 @@ def test_configure_mission_identity_accepts_valid_resource_id_casing(monkeypatch
     assert assignment_calls
 
 
+def test_configure_mission_identity_scopes_role_assignment_to_the_foundry_resource_group_when_different(
+    monkeypatch,
+):
+    """Real bug found via live Deploy & Launch testing: granting the mission
+    identity Foundry access always scoped the role assignment to the
+    deployment resource group, even when Settings.azure_foundry_resource_group
+    (see its own docstring and the identical pattern in
+    app.services.model_catalog_service) names a DIFFERENT resource group
+    that actually contains the Foundry account - exactly the supported
+    "reuse an existing Foundry project in a dedicated environment" scenario.
+    That mismatch failed every Deploy & Launch run closed with
+    `(ResourceNotFound) ... was not found` the moment the two resource
+    groups genuinely differed, because the generated ARM scope pointed at
+    a Foundry account name under the wrong resource group entirely."""
+
+    service = BackendDeploymentService(
+        subscription_id="sub-123",
+        resource_group="genie-wiq-rg",
+        acr_name="acr123",
+        container_apps_environment_id="env-123",
+        location="eastus2",
+        foundry_endpoint="https://genie-i4opvs55x5qu4-foundry.services.ai.azure.com/api/projects/demo",
+        foundry_project_name="demo",
+        foundry_resource_group="genie-dev-rg",
+    )
+
+    fake_credential = object()
+    fake_identity = SimpleNamespace(principal_id="principal-123", client_id="client-123")
+    assignment_calls = []
+
+    fake_authz = SimpleNamespace(
+        role_assignments=SimpleNamespace(
+            create=lambda **kwargs: assignment_calls.append(kwargs) or None
+        )
+    )
+    fake_msi = SimpleNamespace(
+        user_assigned_identities=SimpleNamespace(
+            get=lambda resource_group_name, identity_name: fake_identity
+        )
+    )
+
+    fake_azure_identity = ModuleType("azure.identity")
+    fake_azure_identity.DefaultAzureCredential = lambda: fake_credential
+    fake_azure_authz = ModuleType("azure.mgmt.authorization")
+    fake_azure_authz.AuthorizationManagementClient = lambda credential, subscription_id: fake_authz
+    fake_azure_msi = ModuleType("azure.mgmt.msi")
+    fake_azure_msi.ManagedServiceIdentityClient = lambda credential, subscription_id: fake_msi
+
+    monkeypatch.setitem(sys.modules, "azure.identity", fake_azure_identity)
+    monkeypatch.setitem(sys.modules, "azure.mgmt.authorization", fake_azure_authz)
+    monkeypatch.setitem(sys.modules, "azure.mgmt.msi", fake_azure_msi)
+
+    resource_id = (
+        "/subscriptions/sub-123/resourceGroups/genie-wiq-rg/providers/"
+        "Microsoft.ManagedIdentity/userAssignedIdentities/genie-mission-demo"
+    )
+    result = service._configure_mission_identity(resource_id)
+
+    assert result == "client-123"
+    assert len(assignment_calls) == 1
+    scope = assignment_calls[0]["scope"]
+    assert "/resourceGroups/genie-dev-rg/" in scope
+    assert "genie-wiq-rg" not in scope
+
+
+def test_create_backend_deployment_service_threads_the_foundry_resource_group_setting():
+    """Settings.azure_foundry_resource_group must actually reach
+    BackendDeploymentService - the field existed and was documented, but
+    nothing wired it through until this fix."""
+
+    service = create_backend_deployment_service(
+        settings=_settings(
+            azure_subscription_id="sub-1",
+            deployment_resource_group="genie-wiq-rg",
+            deployment_acr_name="acr1",
+            deployment_container_apps_environment_id="env-1",
+            deployment_location="eastus2",
+            azure_foundry_endpoint="https://genie-i4opvs55x5qu4-foundry.services.ai.azure.com/api/projects/demo",
+            azure_foundry_project_name="demo",
+            azure_foundry_resource_group="genie-dev-rg",
+        )
+    )
+
+    assert isinstance(service, BackendDeploymentService)
+    assert service._foundry_resource_group == "genie-dev-rg"  # noqa: SLF001
+
+
+def test_create_backend_deployment_service_falls_back_to_deployment_resource_group_when_unset():
+    """Preserves prior behavior for environments where the Foundry account
+    and the Deploy & Launch target resource group are the same (the
+    documented fallback in Settings.azure_foundry_resource_group)."""
+
+    service = create_backend_deployment_service(
+        settings=_settings(
+            azure_subscription_id="sub-1",
+            deployment_resource_group="genie-wiq-rg",
+            deployment_acr_name="acr1",
+            deployment_container_apps_environment_id="env-1",
+            deployment_location="eastus2",
+            azure_foundry_endpoint="https://genie-demo-resource.services.ai.azure.com/api/projects/demo",
+            azure_foundry_project_name="demo",
+        )
+    )
+
+    assert isinstance(service, BackendDeploymentService)
+    assert service._foundry_resource_group == "genie-wiq-rg"  # noqa: SLF001
+
+
 async def test_wait_for_readiness_accepts_generated_orchestrator_through_gateway(
     monkeypatch,
 ):
     requested_urls = []
+
+
+
 
     class FakeAsyncClient:
         def __init__(self, *, timeout):
