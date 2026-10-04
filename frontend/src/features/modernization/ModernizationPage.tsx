@@ -57,6 +57,35 @@ const CAPABILITY_TARGET_OPTIONS: Record<string, string[]> = {
  * walkthrough (monolith_modularization, below). */
 const DEPLOYABLE_CAPABILITY_IDS = new Set(["rehost_lift_and_shift", "replatform"]);
 
+/** Every capability's execute_plan opens a real branch + draft PR with
+ * complete file content (never just a recommendation) - but only
+ * Rehost/Replatform (ModernizationDeploymentPanel) and
+ * monolith_modularization (ModernizationWalkthrough) get a further,
+ * dedicated post-PR UI. Real user feedback: leaving the other capabilities
+ * silent after the PR link made it unclear whether anything had actually
+ * happened. This note makes explicit, per capability, what the PR already
+ * contains and what (if anything) to do next - strategy_recommendation's
+ * PR holds an analysis document rather than a code change, so it gets its
+ * own distinct wording. */
+const POST_PR_GUIDANCE: Record<string, string> = {
+  runtime_upgrade:
+    "This draft PR already contains the real runtime/language upgrade - review and merge it "
+    + "through your normal process. This capability doesn't change hosting, so there's nothing "
+    + "further for Genie to provision here.",
+  framework_upgrade:
+    "This draft PR already contains the real framework upgrade - review and merge it through "
+    + "your normal process. This capability doesn't change hosting, so there's nothing further "
+    + "for Genie to provision here.",
+  dependency_upgrade:
+    "This draft PR already contains the real dependency upgrade or replacement - review and "
+    + "merge it through your normal process. This capability doesn't change hosting, so there's "
+    + "nothing further for Genie to provision here.",
+  strategy_recommendation:
+    "This draft PR adds a single MODERNIZATION_STRATEGY.md analysis document, not a code change "
+    + "- review its per-component recommendations, then generate a new plan with whichever "
+    + "capability it recommends to actually act on one.",
+};
+
 /** Human-readable labels for a plan's raw, snake_case lifecycle `status`
  * field - shown verbatim before this (e.g. "pending_approval") read as a
  * rendering glitch rather than real status text. */
@@ -774,6 +803,12 @@ export function ModernizationPage(): JSX.Element {
                     ) : null}
                     {plan.status === "pull_request_opened" && plan.capability_id === "monolith_modularization" ? (
                       <ModernizationWalkthrough steps={plan.deployment_plan} />
+                    ) : null}
+                    {plan.status === "pull_request_opened" && plan.capability_id
+                      && POST_PR_GUIDANCE[plan.capability_id] ? (
+                      <MessageBar intent="info">
+                        <MessageBarBody>{POST_PR_GUIDANCE[plan.capability_id]}</MessageBarBody>
+                      </MessageBar>
                     ) : null}
                   </>
                 ) : plan.status === "pending_approval" && !isApproved ? (

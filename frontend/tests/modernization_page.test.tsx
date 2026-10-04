@@ -772,6 +772,45 @@ describe("ModernizationPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Reject this plan/ })).toBeInTheDocument();
   });
+
+  it("shows capability-specific post-PR guidance for upgrades and strategy recommendation, not the deployment panel", async () => {
+    const cases: Array<[string, string]> = [
+      ["runtime_upgrade", "already contains the real runtime/language upgrade"],
+      ["framework_upgrade", "already contains the real framework upgrade"],
+      ["dependency_upgrade", "already contains the real dependency upgrade"],
+      ["strategy_recommendation", "adds a single MODERNIZATION_STRATEGY.md analysis document"],
+    ];
+
+    for (const [capabilityId, expectedText] of cases) {
+      const plan = {
+        ...BASE_PLAN,
+        capability_id: capabilityId,
+        status: "pull_request_opened",
+        pull_request_url: "https://github.com/raviganesh-ai/lumen-grove-demo/pull/3",
+      };
+
+      mockFetchSequence([
+        { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+        { match: "/platform-config/reference-repositories", response: [] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+      ]);
+
+      const { unmount } = renderWithProviders(<ModernizationPage />, {
+        sessionId: FIXTURE_SESSION_ID,
+      });
+
+      expect(await screen.findByText(new RegExp(expectedText, "i"))).toBeInTheDocument();
+      // Neither the real-deployment panel nor the walkthrough checklist
+      // applies to these capabilities - only the guidance text should
+      // explain what happens next.
+      expect(screen.queryByText(/Deploy to Azure Container Apps/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/walk through this modularization/i)).not.toBeInTheDocument();
+      unmount();
+    }
+  });
 
   it("lets the user propose, approve, and execute a real Container Apps deployment for an opened rehost plan", async () => {
     const user = userEvent.setup();
