@@ -631,12 +631,19 @@ describe("ModernizationPage", () => {
       screen.getByText(/Superseded by a newer refinement of this plan/i),
     ).toBeInTheDocument();
 
+    // Real user feedback: collapsing only the analysis content but still
+    // showing each plan's own governance decision box looked like
+    // "repeat of controls" - exactly one decision box (the latest plan's)
+    // may be visible while the superseded one is collapsed.
+    expect(screen.getAllByText(/Your decision is needed/i)).toHaveLength(1);
+
     // It stays fully inspectable on demand, though - this is governance
     // history, not deleted data.
     await user.click(screen.getByRole("button", { name: /Show details/i }));
     expect(
       await screen.findByText("Upgrade in place; no architectural change is required."),
     ).toBeInTheDocument();
+    expect(screen.getAllByText(/Your decision is needed/i)).toHaveLength(2);
   });
 
   it("shows the inline Approve/Reject decision immediately after generating a plan, without a full page reload", async () => {

@@ -741,70 +741,70 @@ export function ModernizationPage(): JSX.Element {
                     fallbackDetail="This can take a little while - this is still working."
                   />
                 ) : null}
+                {plan.pull_request_url ? (
+                  <>
+                    <Link href={plan.pull_request_url} target="_blank" rel="noreferrer">
+                      Open draft pull request
+                    </Link>
+                    {plan.status === "pull_request_opened" && plan.capability_id
+                      && DEPLOYABLE_CAPABILITY_IDS.has(plan.capability_id) ? (
+                      <ModernizationDeploymentPanel sessionId={sessionId} planId={plan.id} />
+                    ) : null}
+                    {plan.status === "pull_request_opened" && plan.capability_id === "monolith_modularization" ? (
+                      <ModernizationWalkthrough steps={plan.deployment_plan} />
+                    ) : null}
+                  </>
+                ) : plan.status === "pending_approval" && !isApproved ? (
+                  <MessageBar intent={isRejected ? "error" : "warning"}>
+                    <MessageBarBody>
+                      <Text weight="semibold" block>
+                        {isRejected
+                          ? "This plan's governance approval was rejected - it cannot be executed."
+                          : "Your decision is needed before this plan can be executed."}
+                      </Text>
+                      {!isRejected && approval ? (
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <Button
+                            appearance="primary"
+                            disabled={isDeciding}
+                            onClick={() => void decide(approval.id, "approved")}
+                          >
+                            Approve and allow execution
+                          </Button>
+                          <Button
+                            appearance="secondary"
+                            disabled={isDeciding}
+                            onClick={() => void decide(approval.id, "rejected")}
+                          >
+                            Reject this plan
+                          </Button>
+                        </div>
+                      ) : null}
+                      <Text size={200} style={{ display: "block", marginTop: 8 }}>
+                        <Link onClick={() => navigate("/phases")}>View the full governance trace</Link>
+                      </Text>
+                    </MessageBarBody>
+                  </MessageBar>
+                ) : (
+                  <>
+                    <Button
+                      appearance="primary"
+                      disabled={working || plan.status !== "pending_approval"}
+                      onClick={() => void execute(plan.id)}
+                    >
+                      Execute after Governance approval
+                    </Button>
+                    {executingPlanId === plan.id ? (
+                      <AgentActivityAnimation
+                        label="Creating the branch, pushing files, and opening the draft pull request..."
+                        startedAt={executingStartedAt}
+                        fallbackDetail="This can take a little while - this is still working."
+                      />
+                    ) : null}
+                  </>
+                )}
               </>
             ) : null}
-            {plan.pull_request_url ? (
-              <>
-                <Link href={plan.pull_request_url} target="_blank" rel="noreferrer">
-                  Open draft pull request
-                </Link>
-                {plan.status === "pull_request_opened" && plan.capability_id
-                  && DEPLOYABLE_CAPABILITY_IDS.has(plan.capability_id) ? (
-                  <ModernizationDeploymentPanel sessionId={sessionId} planId={plan.id} />
-                ) : null}
-                {plan.status === "pull_request_opened" && plan.capability_id === "monolith_modularization" ? (
-                  <ModernizationWalkthrough steps={plan.deployment_plan} />
-                ) : null}
-              </>
-            ) : plan.status === "pending_approval" && !isApproved ? (
-              <MessageBar intent={isRejected ? "error" : "warning"}>
-                <MessageBarBody>
-                  <Text weight="semibold" block>
-                    {isRejected
-                      ? "This plan's governance approval was rejected - it cannot be executed."
-                      : "Your decision is needed before this plan can be executed."}
-                  </Text>
-                  {!isRejected && approval ? (
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <Button
-                        appearance="primary"
-                        disabled={isDeciding}
-                        onClick={() => void decide(approval.id, "approved")}
-                      >
-                        Approve and allow execution
-                      </Button>
-                      <Button
-                        appearance="secondary"
-                        disabled={isDeciding}
-                        onClick={() => void decide(approval.id, "rejected")}
-                      >
-                        Reject this plan
-                      </Button>
-                    </div>
-                  ) : null}
-                  <Text size={200} style={{ display: "block", marginTop: 8 }}>
-                    <Link onClick={() => navigate("/phases")}>View the full governance trace</Link>
-                  </Text>
-                </MessageBarBody>
-              </MessageBar>
-            ) : (
-              <>
-                <Button
-                  appearance="primary"
-                  disabled={working || plan.status !== "pending_approval"}
-                  onClick={() => void execute(plan.id)}
-                >
-                  Execute after Governance approval
-                </Button>
-                {executingPlanId === plan.id ? (
-                  <AgentActivityAnimation
-                    label="Creating the branch, pushing files, and opening the draft pull request..."
-                    startedAt={executingStartedAt}
-                    fallbackDetail="This can take a little while - this is still working."
-                  />
-                ) : null}
-              </>
-            )}
           </Card>
         );
       })}

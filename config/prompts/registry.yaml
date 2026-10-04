@@ -78,18 +78,21 @@ prompts:
       every unit price deterministically from the Azure Retail Prices API and reports missing
       coverage. Include one query per independently billed Azure service the *proposed*
       architecture would add, change, or newly require - omit pricing_queries entirely when the
-      capability does not change what is deployed or its hosting costs. When you omit
-      pricing_queries for that reason, populate illustrative_pricing_queries instead (same
-      fields and rules) with your best-effort estimate of what a typical, minimal Azure
-      deployment of this workload's existing, unchanged technology stack would cost - grounded
-      in the dependency assessment's detected language, framework, and any existing
-      infrastructure files (for example one small always-on instance sized for a workload of
-      this type) - this is shown to the user as a clearly labeled illustrative baseline, never
-      as a claim about their actual current spend, so a reasonable, evidenced assumption is
-      expected even though nothing is actually changing. Leave both pricing_queries and
-      illustrative_pricing_queries empty only when there truly is not enough evidence in the
-      dependency assessment to ground even an illustrative baseline (e.g. no detected
-      language/runtime at all). Each changed file must contain complete replacement content.
+      capability does not change what is deployed or its hosting costs. Whenever you omit
+      pricing_queries for that reason, you MUST instead populate illustrative_pricing_queries
+      (same fields and rules) with at least one entry - this is a hard requirement, not a
+      judgment call, whenever the dependency assessment shows any detected language, runtime,
+      manifest file, Dockerfile, or infrastructure path (which is true for nearly every
+      assessed repository). Ground the entry in that evidence (language/framework/existing
+      infrastructure files); if the exact current sizing is not evidenced, default to a single
+      small always-on container instance (for example 0.5 vCPU / 1 GiB memory, one replica) as
+      a clearly stated assumption rather than omitting the estimate. This is shown to the user
+      as a clearly labeled illustrative baseline, never as a claim about their actual current
+      spend, so a reasonable default assumption is always expected even though nothing is
+      actually changing. Leave both pricing_queries and illustrative_pricing_queries empty only
+      in the genuinely rare case where the dependency assessment shows no detected
+      language/runtime/manifest/infrastructure evidence whatsoever. Each changed file must
+      contain complete replacement content.
       Return at most 20 proposed_components, 20 deployment_plan steps, and 10 entries combined
       across pricing_queries and illustrative_pricing_queries. Do not return Markdown fences.
     variables:
