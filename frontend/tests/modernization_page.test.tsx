@@ -311,6 +311,11 @@ describe("ModernizationPage", () => {
   it("shows the rewrite strategy, proposed architecture graph, deployment plan, constraints, and estimated cost", async () => {
     const plan = {
       ...BASE_PLAN,
+      // Matches this test's modularization-flavored content below
+      // (billing/notifications module boundaries) so the "Rewrite
+      // strategy" heading (capability-specific - see
+      // rewriteStrategyLabel) is the one actually asserted.
+      capability_id: "monolith_modularization",
       rewrite_strategy: "Introduce module boundaries along billing/notifications coupling.",
       proposed_components: [
         {
@@ -418,6 +423,36 @@ describe("ModernizationPage", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
     expect(screen.queryByText(/retail pricing coverage/i)).not.toBeInTheDocument();
+  });
+
+  it("labels the rewrite_strategy section differently per capability, since each is a genuinely different operation", async () => {
+    const cases: Array<[string | null, string]> = [
+      ["rehost_lift_and_shift", "Migration strategy"],
+      ["replatform", "Replatform strategy"],
+      ["dependency_upgrade", "Dependency upgrade rationale"],
+      ["strategy_recommendation", "Recommendation rationale"],
+      [null, "Strategy rationale"],
+    ];
+
+    for (const [capabilityId, expectedLabel] of cases) {
+      const plan = { ...BASE_PLAN, capability_id: capabilityId };
+
+      mockFetchSequence([
+        { match: `/sessions/${FIXTURE_SESSION_ID}/modernization/capabilities`, response: [] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/repository-bindings`, response: [] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/repository-assessments`, response: [] },
+        { match: "/platform-config/reference-repositories", response: [] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/modernization`, response: [plan] },
+        { match: `/sessions/${FIXTURE_SESSION_ID}/approvals`, response: [] },
+      ]);
+
+      const { unmount } = renderWithProviders(<ModernizationPage />, {
+        sessionId: FIXTURE_SESSION_ID,
+      });
+
+      expect(await screen.findByText(expectedLabel)).toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("shows a clearly-labeled illustrative estimate when the plan has no pricing queries but a resolved baseline", async () => {
@@ -530,7 +565,10 @@ describe("ModernizationPage", () => {
 
     renderWithProviders(<ModernizationPage />, { sessionId: FIXTURE_SESSION_ID });
 
-    expect(await screen.findByText("Rewrite strategy")).toBeInTheDocument();
+    // BASE_PLAN's capability_id is "runtime_upgrade" -> its own tailored
+    // heading (see rewriteStrategyLabel), not the generic "Rewrite
+    // strategy" text reserved for monolith_modularization.
+    expect(await screen.findByText("Runtime upgrade rationale")).toBeInTheDocument();
     expect(screen.queryByText("Proposed architecture")).not.toBeInTheDocument();
   });
 

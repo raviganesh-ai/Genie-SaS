@@ -70,6 +70,28 @@ function formatPlanStatus(status: string): string {
   return PLAN_STATUS_LABELS[status] ?? status.replace(/_/g, " ");
 }
 
+/** The backend's `rewrite_strategy` field is one shared Pydantic field
+ * used by every capability (see ModernizationPlan), holding prose
+ * explaining "why this approach was chosen" - but a single hardcoded
+ * "Rewrite strategy" heading was wrong for capabilities that don't
+ * rewrite anything (e.g. Rehost just containerizes unmodified code; a
+ * dependency upgrade just bumps a version). Each capability is a
+ * genuinely distinct operation (real user feedback), so each gets its
+ * own tailored section heading instead of being bucketed together. */
+const REWRITE_STRATEGY_LABELS: Record<string, string> = {
+  runtime_upgrade: "Runtime upgrade rationale",
+  framework_upgrade: "Framework upgrade rationale",
+  dependency_upgrade: "Dependency upgrade rationale",
+  strategy_recommendation: "Recommendation rationale",
+  rehost_lift_and_shift: "Migration strategy",
+  replatform: "Replatform strategy",
+  monolith_modularization: "Rewrite strategy",
+};
+
+function rewriteStrategyLabel(capabilityId: string | null): string {
+  return (capabilityId ? REWRITE_STRATEGY_LABELS[capabilityId] : undefined) ?? "Strategy rationale";
+}
+
 /** The Build Agent sometimes writes its own "1. ", "2) " etc. prefix
  * directly into a deployment_plan step's text. Rendered inside an <ol>
  * (which numbers every <li> itself), that produced a real, confusing
@@ -637,7 +659,7 @@ export function ModernizationPage(): JSX.Element {
               <>
                 {plan.rewrite_strategy ? (
                   <div>
-                    <Text weight="semibold">Rewrite strategy</Text>
+                    <Text weight="semibold">{rewriteStrategyLabel(plan.capability_id)}</Text>
                     <Text block size={300}>{plan.rewrite_strategy}</Text>
                   </div>
                 ) : null}
