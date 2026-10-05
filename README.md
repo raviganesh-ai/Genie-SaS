@@ -121,15 +121,16 @@ It's fully interactive and never assumes a specific tenant/subscription/account:
 
 1. Confirms your signed-in `az` identity (or runs `az login` for you) and lets you pick which subscription to deploy into.
 2. Prompts for everything the deployment needs - environment name, Azure region, your own GitHub Personal Access Token (for the GitHub MCP connection Modernize & Deliver uses), an APIM publisher contact, and which LLM model to deploy. Nothing is pre-filled with a real value, and no credential is ever written to a file this repository tracks.
-3. Validates Azure resource-provider readiness (fails closed rather than deploying partway).
-4. Deploys `infra/main.bicep` - a single subscription-scoped Bicep template that creates its own resource group and **every** foundational Azure resource Genie needs: managed identity, Key Vault, Storage, AI Search, Cosmos DB, Azure AI Foundry (+ your chosen model deployment), VNet, Container Apps environment, **Azure Container Registry**, and a **bootstrap backend Container App** - see [Architecture](#genie-azure-platform).
-5. Builds and pushes the real FastAPI image, then rolls it onto that Container App.
-6. Provisions the dedicated Standard v2 APIM gateway (`scripts/deploy_platform_gateway.ps1`).
-7. Provisions every Genie agent as a real Azure AI Foundry resource (`scripts/provision_foundry_agents.py`).
-8. Builds and deploys the frontend to the Static Web App Bicep already created.
-9. Runs the same health checks documented in [Troubleshooting](#troubleshooting).
+3. If a previous Genie deployment already exists for that exact environment name, offers to remove it first - always with an explicit typed confirmation, and scoped only to that one resource group (see [`scripts/remove_existing_deployment.ps1`](scripts/remove_existing_deployment.ps1); pass `-RemovePreviousDeployment` to skip the prompt).
+4. Validates Azure resource-provider readiness (fails closed rather than deploying partway).
+5. Deploys `infra/main.bicep` - a single subscription-scoped Bicep template that creates its own resource group and **every** foundational Azure resource Genie needs: managed identity, Key Vault, Storage, AI Search, Cosmos DB, Azure AI Foundry (+ your chosen model deployment), VNet, Container Apps environment, **Azure Container Registry**, and a **bootstrap backend Container App** - see [Architecture](#genie-azure-platform). This step alone does **not** create API Management (step 7) - APIM can only be wired up once this step's backend Container App already exists.
+6. Builds and pushes the real FastAPI image, then rolls it onto that Container App.
+7. Provisions the dedicated Standard v2 APIM gateway (`scripts/deploy_platform_gateway.ps1`) - this is the step that actually creates Azure API Management. If you only run `infra/main.bicep` on its own (skipping this script), you will correctly see no APIM at all - that's expected, not a bug.
+8. Provisions every Genie agent as a real Azure AI Foundry resource (`scripts/provision_foundry_agents.py`).
+9. Builds and deploys the frontend to the Static Web App Bicep already created.
+10. Runs the same health checks documented in [Troubleshooting](#troubleshooting).
 
-This is intentionally **long-running** (Azure API Management Standard v2 provisioning alone commonly takes 30-45 minutes) and **stops at the first failure** rather than attempting a partial/best-effort deployment - every stage it calls is independently idempotent, so re-running the script after fixing a problem is safe.
+This is intentionally **long-running** (Azure API Management Standard v2 provisioning alone commonly takes 30-45 minutes) and **stops at the first failure** rather than attempting a partial/best-effort deployment - every stage it calls is independently idempotent, so re-running the script after fixing a problem is safe. To start over from a clean slate instead of resuming, step 3 above offers this every time, or run [`scripts/remove_existing_deployment.ps1`](scripts/remove_existing_deployment.ps1) directly.
 
 Want to understand or customize an individual stage, reuse existing Azure resources, or see how Genie's own continuous deployment pipeline works? See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full manual/advanced reference.
 
@@ -348,7 +349,8 @@ infra/              Bicep infrastructure-as-code
   platform-private-gateway.bicep    Standard v2 APIM gateway + private network cutover
 
 scripts/            Operator CLI scripts
-  deploy_quickstart.ps1   One-command deploy into any Azure subscription - see Quickstart
+  deploy_quickstart.ps1            One-command deploy into any Azure subscription - see Quickstart
+  remove_existing_deployment.ps1   Safely removes a previous deployment's resource group before a fresh retry
   (deployment readiness, RBAC role generation, Foundry agent
    provisioning/sync/validation/inventory export, individual deploy stages)
 

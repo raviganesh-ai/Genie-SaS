@@ -7,6 +7,22 @@ Genie has two supported deployment paths:
 
 Both paths provision the same architecture (see [Architecture](../README.md#architecture) in the main README): Bicep infrastructure-as-code creates foundational Azure resources and a dedicated APIM subnet, a public Standard v2 APIM gateway with outbound VNet integration is the only Internet-facing endpoint, a FastAPI Container App is reached only through its environment private endpoint, and a static React frontend is deployed to Azure Static Web Apps. Generated prototypes (Deploy & Launch) are separate and get their own APIM service and private Container Apps environment per mission. Deployment is split into readiness validation → infrastructure provisioning → agent provisioning → gateway/private-network cutover → application deployment, matching the repo's fail-closed philosophy: nothing proceeds until the previous step is verified. These instructions reproduce the **evaluation environment**; they do not supersede the production-readiness work required by the [Purpose and use boundary](../README.md#purpose-and-use-boundary).
 
+> **`infra/main.bicep` alone does not create API Management.** APIM is a separate template, `infra/platform-private-gateway.bicep`, applied by `scripts/deploy_platform_gateway.ps1` as its own later stage - it can only be wired up once the backend Container App that `main.bicep` creates already exists, and the private-network cutover it performs is a deliberately imperative, verified sequence (prove APIM reaches the backend → prepare private DNS → disable public access → create the private endpoint → re-verify) rather than a single declarative template. `scripts/deploy_quickstart.ps1` runs both of these automatically, in order, as part of its one command; if you deploy `infra/main.bicep` by itself (for example via `az deployment sub create` directly, or `scripts/deploy_infra.ps1`), you will correctly see no APIM at all afterward - that is expected, not a bug. See step 6 in [the manual deployment steps](#6-deploying-application-code-backend--frontend) below for the equivalent manual command.
+
+### Removing a previous deployment before a fresh retry
+
+If an earlier deployment attempt for the same `(ResourcePrefix, EnvironmentName)` pair left a partial or broken resource group behind, remove it first:
+
+```powershell
+./scripts/remove_existing_deployment.ps1 -SubscriptionId <subscription-id> -EnvironmentName dev -Location eastus2
+```
+
+Deliberately narrow in scope: it only ever inspects and removes the single resource group `infra/main.bicep` creates (`<prefix>-<environment>-rg`), which also holds the APIM gateway `platform-private-gateway.bicep` adds into that same resource group. It never touches per-mission prototype resource groups (`genie-proto-*` - those have their own TTL/cleanup reconciler) or the one-time deployment identity from step 1 below. Nothing is deleted without an explicit confirmation - you must type the resource group's exact name back, or re-run the script for a non-interactive build runner, with `-Yes`.
+
+**Key Vault purge protection caveat (Azure behavior, not a limitation of this script):** `infra/modules/key-vault.bicep` enables purge protection deliberately. Deleting the resource group only *soft*-deletes its Key Vault, and Azure then refuses to let **any** vault reuse that exact name for 90 days - no CLI flag can override this once purge protection is on. Because the vault name is derived deterministically from `(subscription, EnvironmentName, Location)`, redeploying with the **same** `-EnvironmentName` after a delete will hit that same name again. The script detects this up front and tells you plainly; the two real workarounds are to pick a **different** `-EnvironmentName` for an immediately clean redeploy, or wait out the retention window.
+
+`scripts/deploy_quickstart.ps1` runs this check automatically (always with the same confirmation, or pass its own `-RemovePreviousDeployment` switch to skip the prompt) before provisioning anything.
+
 ---
 
 ## Manual deployment

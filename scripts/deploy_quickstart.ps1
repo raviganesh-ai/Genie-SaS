@@ -14,27 +14,38 @@
          pre-filled with a real value belonging to any specific
          organization, and no credential is ever written to a file this
          repository tracks or printed back out after it's collected.
-      3. Validates Azure resource-provider readiness (fails closed).
-      4. Deploys infra/main.bicep - creates its own resource group and
+      3. Offers to remove a previous deployment for this exact
+         (ResourcePrefix, EnvironmentName) pair first, if one already
+         exists - always confirmed, scoped only to that one resource
+         group (see scripts/remove_existing_deployment.ps1).
+      4. Validates Azure resource-provider readiness (fails closed).
+      5. Deploys infra/main.bicep - creates its own resource group and
          EVERY foundational resource Genie needs, including (new) an
          Azure Container Registry and a bootstrap backend Container App,
          so an empty subscription ends up with a real, addressable
-         Container App resource.
-      5. Builds and pushes the real FastAPI image, then rolls it onto
+         Container App resource. This does NOT yet include the API
+         Management gateway (step 7) - APIM can only be wired up once
+         this step's backend Container App already exists.
+      6. Builds and pushes the real FastAPI image, then rolls it onto
          that Container App via the existing scripts/deploy_backend.ps1.
-      6. Provisions the dedicated APIM gateway via
-         scripts/deploy_platform_gateway.ps1.
-      7. Provisions every Genie agent as a real Azure AI Foundry resource
+      7. Provisions the dedicated APIM gateway via
+         scripts/deploy_platform_gateway.ps1 - this is what actually
+         creates Azure API Management; running infra/main.bicep alone
+         (without this script) never does.
+      8. Provisions every Genie agent as a real Azure AI Foundry resource
          via scripts/provision_foundry_agents.py.
-      8. Builds and deploys the frontend to the Static Web App Bicep
+      9. Builds and deploys the frontend to the Static Web App Bicep
          already created.
-      9. Runs the same health checks documented in README.md.
+      10. Runs the same health checks documented in README.md.
 
     This script is intentionally LONG-RUNNING (Azure API Management
     Standard v2 provisioning alone commonly takes 30-45 minutes) and
     intentionally STOPS at the first failure (fail closed) rather than
     attempting a partial/best-effort deployment - re-run it; every stage
     is either already idempotent (the scripts it calls) or safe to retry.
+    To start over from a clean slate instead of resuming, see
+    scripts/remove_existing_deployment.ps1 (step 3 above runs it for you
+    automatically, with your explicit confirmation, every time).
 
     Per the Purpose and use boundary in README.md: this reproduces
     Genie's ART-OF-THE-POSSIBLE EVALUATION environment, not a
@@ -67,6 +78,13 @@
     Skip the final frontend build/deploy stage (useful when iterating on
     backend-only stages during testing).
 
+.PARAMETER RemovePreviousDeployment
+    Skip the interactive confirmation prompt and immediately remove a
+    previous deployment for this exact (ResourcePrefix, EnvironmentName)
+    pair, if one exists, before continuing. Omit this for the normal,
+    safer behavior of being asked to type the resource group name back
+    before anything is deleted.
+
 .EXAMPLE
     ./scripts/deploy_quickstart.ps1
     (fully interactive - prompts for everything required)
@@ -80,7 +98,8 @@ param(
     [string]$EnvironmentName = "dev",
     [string]$Location = "eastus2",
     [string]$ResourcePrefix = "genie",
-    [switch]$SkipFrontendDeploy
+    [switch]$SkipFrontendDeploy,
+    [switch]$RemovePreviousDeployment
 )
 
 $ErrorActionPreference = "Stop"
@@ -145,7 +164,7 @@ if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
 # ---------------------------------------------------------------------------
 # Stage 0: identity - confirm (or establish) YOUR OWN signed-in az session.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 0/9: confirm your Azure identity"
+Write-Stage "Stage 0/10: confirm your Azure identity"
 $account = $null
 try { $account = Invoke-AzJson account show } catch { $account = $null }
 if (-not $account) {
@@ -181,7 +200,7 @@ Write-Host "Deploying into subscription: $SubscriptionId" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 # Stage 1: collect every other required value interactively.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 1/9: collect deployment parameters"
+Write-Stage "Stage 1/10: collect deployment parameters"
 $EnvironmentName = Read-RequiredValue -Prompt "Environment name" -Default $EnvironmentName
 $Location = Read-RequiredValue -Prompt "Azure region" -Default $Location
 $ResourcePrefix = Read-RequiredValue -Prompt "Resource name prefix" -Default $ResourcePrefix
@@ -214,9 +233,28 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 2: deployment readiness validation (fail closed).
+# Stage 2: offer to remove a previous Genie deployment for this exact
+# (ResourcePrefix, EnvironmentName) pair before provisioning a fresh one -
+# scoped narrowly to scripts/remove_existing_deployment.ps1's own resource
+# group only (never per-mission prototype resource groups). Always
+# interactive/confirmed - never deletes anything without you explicitly
+# typing the resource group name back.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 2/9: deployment readiness validation"
+Write-Stage "Stage 2/10: check for a previous deployment to remove first"
+& (Join-Path $repoRoot "scripts\remove_existing_deployment.ps1") `
+    -SubscriptionId $SubscriptionId `
+    -EnvironmentName $EnvironmentName `
+    -ResourcePrefix $ResourcePrefix `
+    -Location $Location `
+    -Yes:$RemovePreviousDeployment
+if ($LASTEXITCODE -ne 0) {
+    throw "Pre-deployment cleanup check failed."
+}
+
+# ---------------------------------------------------------------------------
+# Stage 3: deployment readiness validation (fail closed).
+# ---------------------------------------------------------------------------
+Write-Stage "Stage 3/10: deployment readiness validation"
 $pythonExe = Join-Path $repoRoot "backend\.venv\Scripts\python.exe"
 if (-not (Test-Path $pythonExe)) {
     Write-Host "Creating backend virtual environment (first run only)..." -ForegroundColor Yellow
@@ -245,7 +283,7 @@ finally {
 # ---------------------------------------------------------------------------
 # Stage 3: provision infrastructure (infra/main.bicep).
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 3/9: provisioning infrastructure (this can take 10-20 minutes)"
+Write-Stage "Stage 4/10: provisioning infrastructure (this can take 10-20 minutes)"
 $deploymentName = "genie-$EnvironmentName-$(Get-Date -Format 'yyyyMMddHHmmss')"
 # Array-typed Bicep parameters (foundryModelDeployments) are passed via a
 # generated ARM parameters file rather than an inline `name=value` CLI
@@ -299,7 +337,7 @@ if ([string]::IsNullOrWhiteSpace($containerAppName) -or [string]::IsNullOrWhiteS
 # ---------------------------------------------------------------------------
 # Stage 4: build and push the real backend image.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 4/9: building and pushing the backend image"
+Write-Stage "Stage 5/10: building and pushing the backend image"
 $imageTag = (git -C $repoRoot rev-parse --short HEAD 2>$null)
 if ([string]::IsNullOrWhiteSpace($imageTag)) { $imageTag = Get-Date -Format "yyyyMMddHHmmss" }
 $backendImage = "$acrLoginServer/genie-backend:$imageTag"
@@ -317,7 +355,7 @@ if ($LASTEXITCODE -ne 0) {
 # ---------------------------------------------------------------------------
 # Stage 5: provision the dedicated API Management gateway.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 5/9: provisioning the API Management gateway (first run commonly takes 30-45 minutes)"
+Write-Stage "Stage 6/10: provisioning the API Management gateway (first run commonly takes 30-45 minutes)"
 $gateway = & (Join-Path $repoRoot "scripts\deploy_platform_gateway.ps1") `
     -SubscriptionId $SubscriptionId `
     -ResourceGroup $resourceGroup `
@@ -334,7 +372,7 @@ Write-Host "Gateway URL: $gatewayUrl" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 # Stage 6: store the GitHub MCP token and roll out the real backend image.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 6/9: configuring and rolling out the real backend"
+Write-Stage "Stage 7/10: configuring and rolling out the real backend"
 az containerapp secret set `
     --subscription $SubscriptionId `
     --resource-group $resourceGroup `
@@ -387,7 +425,7 @@ if ($LASTEXITCODE -ne 0) {
 # ---------------------------------------------------------------------------
 # Stage 7: provision every Genie agent as a real Azure AI Foundry resource.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 7/9: provisioning Azure AI Foundry agents"
+Write-Stage "Stage 8/10: provisioning Azure AI Foundry agents"
 $env:GENIE_AZURE_FOUNDRY_ENDPOINT = $aiFoundryEndpoint
 $env:GENIE_AZURE_FOUNDRY_PROJECT_NAME = $aiFoundryProjectName
 Push-Location $repoRoot
@@ -406,7 +444,7 @@ finally {
 # Stage 8: build and deploy the frontend.
 # ---------------------------------------------------------------------------
 if (-not $SkipFrontendDeploy) {
-    Write-Stage "Stage 8/9: building and deploying the frontend"
+    Write-Stage "Stage 9/10: building and deploying the frontend"
     Push-Location (Join-Path $repoRoot "frontend")
     try {
         $env:VITE_GENIE_API_BASE_URL = $gatewayUrl
@@ -427,13 +465,13 @@ if (-not $SkipFrontendDeploy) {
     }
 }
 else {
-    Write-Stage "Stage 8/9: skipped (-SkipFrontendDeploy)"
+    Write-Stage "Stage 9/10: skipped (-SkipFrontendDeploy)"
 }
 
 # ---------------------------------------------------------------------------
 # Stage 9: health checks + summary.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 9/9: verifying health"
+Write-Stage "Stage 10/10: verifying health"
 try {
     $live = Invoke-WebRequest -Uri "$gatewayUrl/health/live" -UseBasicParsing -TimeoutSec 30
     $ready = Invoke-WebRequest -Uri "$gatewayUrl/health/ready" -UseBasicParsing -TimeoutSec 30
