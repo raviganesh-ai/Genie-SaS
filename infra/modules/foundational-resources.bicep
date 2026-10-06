@@ -228,6 +228,7 @@ output storageAccountName string = storageAccount.outputs.name
 output aiSearchEndpoint string = aiSearch.outputs.endpoint
 output cosmosDbEndpoint string = cosmosDb.outputs.endpoint
 output aiFoundryEndpoint string = aiFoundry.outputs.endpoint
+output aiFoundryApiEndpoint string = aiFoundry.outputs.aiFoundryApiEndpoint
 output aiFoundryAccountName string = aiFoundry.outputs.accountName
 output aiFoundryProjectName string = aiFoundry.outputs.projectName
 output containerAppsEnvironmentId string = containerAppsEnvironment.outputs.id

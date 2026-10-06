@@ -93,11 +93,13 @@ Every resource is granted only the specific RBAC role it needs on the shared man
 
 After the backend Container App exists, `infra/platform-private-gateway.bicep` adds the Standard v2 APIM service and anonymous proxy API, exact-origin policy, private endpoint, and `privatelink.<region>.azurecontainerapps.io` DNS integration. `scripts/deploy_platform_gateway.ps1` controls the safe cutover rather than having foundational provisioning disable access before a gateway can be verified.
 
-Capture the outputs (`aiFoundryEndpoint`, `aiSearchEndpoint`, `keyVaultUri`, `storageAccountName`, `cosmosDbEndpoint`, `managedIdentityPrincipalId`, `containerAppsEnvironmentId`, `containerRegistryName`, `containerRegistryLoginServer`, `backendContainerAppName`, `staticWebAppDefaultHostname`, `applicationInsightsConnectionString`) via:
+Capture the outputs (`aiFoundryEndpoint`, `aiFoundryApiEndpoint`, `aiSearchEndpoint`, `keyVaultUri`, `storageAccountName`, `cosmosDbEndpoint`, `managedIdentityPrincipalId`, `containerAppsEnvironmentId`, `containerRegistryName`, `containerRegistryLoginServer`, `backendContainerAppName`, `staticWebAppDefaultHostname`, `applicationInsightsConnectionString`) via:
 
 ```powershell
 az deployment sub show --name <deployment-name> --query properties.outputs
 ```
+
+> **`aiFoundryEndpoint` vs. `aiFoundryApiEndpoint`:** both name the same Foundry account, but Azure exposes it on two different hostnames (confirmed live via `az cognitiveservices account show`'s `properties.endpoints` map). `aiFoundryEndpoint` is the generic `<account>.cognitiveservices.azure.com` host - use it only for `GENIE_AZURE_SPEECH_ENDPOINT` (Speech Services still routes there). `aiFoundryApiEndpoint` is the dedicated `<account>.services.ai.azure.com` host Azure's own account metadata advertises for the AI Foundry project API *and* Content Understanding - always build `GENIE_AZURE_FOUNDRY_ENDPOINT` / `<foundry-project-endpoint>` (`<aiFoundryApiEndpoint>/api/projects/<project-name>`) from this one. Using the wrong host here is what makes Content Understanding's `/contentunderstanding/*` routes 404 at backend startup.
 
 ### 4. Deploy an LLM model
 

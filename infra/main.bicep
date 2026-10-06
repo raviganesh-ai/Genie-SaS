@@ -125,6 +125,7 @@ output storageAccountName string = foundationalResources.outputs.storageAccountN
 output aiSearchEndpoint string = foundationalResources.outputs.aiSearchEndpoint
 output cosmosDbEndpoint string = foundationalResources.outputs.cosmosDbEndpoint
 output aiFoundryEndpoint string = foundationalResources.outputs.aiFoundryEndpoint
+output aiFoundryApiEndpoint string = foundationalResources.outputs.aiFoundryApiEndpoint
 output aiFoundryAccountName string = foundationalResources.outputs.aiFoundryAccountName
 output aiFoundryProjectName string = foundationalResources.outputs.aiFoundryProjectName
 output containerAppsEnvironmentId string = foundationalResources.outputs.containerAppsEnvironmentId

@@ -171,6 +171,31 @@ def test_foundry_infrastructure_grants_the_quickstart_operator_data_plane_access
     assert "if (!empty(deployerPrincipalId))" in foundry_module
 
 
+def test_foundry_endpoint_uses_the_services_ai_azure_com_host() -> None:
+    foundry_module = _read("infra/modules/ai-foundry.bicep")
+    foundational_template = _read("infra/modules/foundational-resources.bicep")
+    main_template = _read("infra/main.bicep")
+    script = _read("scripts/deploy_quickstart.ps1")
+
+    # The generic `endpoint` output (legacy `.cognitiveservices.azure.com`
+    # host) must still exist for Speech Services, but AIProjectClient and
+    # Content Understanding require the dedicated `.services.ai.azure.com`
+    # host - conflating the two is what caused Content Understanding's
+    # `/contentunderstanding/*` routes to 404 at backend startup.
+    assert "output endpoint string = foundryAccount.properties.endpoint" in foundry_module
+    assert (
+        "output aiFoundryApiEndpoint string = 'https://${accountName}.services.ai.azure.com'"
+        in foundry_module
+    )
+    assert "output aiFoundryApiEndpoint string = aiFoundry.outputs.aiFoundryApiEndpoint" in foundational_template
+    assert (
+        "output aiFoundryApiEndpoint string = foundationalResources.outputs.aiFoundryApiEndpoint"
+        in main_template
+    )
+    assert '$aiFoundryAccountEndpoint = $outputs.aiFoundryApiEndpoint.value.TrimEnd("/")' in script
+    assert '$aiServicesEndpoint = $outputs.aiFoundryEndpoint.value.TrimEnd("/")' in script
+
+
 def test_key_vault_is_private_and_policy_compliant() -> None:
     key_vault_module = _read("infra/modules/key-vault.bicep")
     private_endpoint_module = _read("infra/modules/key-vault-private-endpoint.bicep")

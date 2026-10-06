@@ -540,7 +540,14 @@ $containerAppName = $outputs.backendContainerAppName.value
 $containerRegistryName = $outputs.containerRegistryName.value
 $acrLoginServer = $outputs.containerRegistryLoginServer.value
 $cosmosDbEndpoint = $outputs.cosmosDbEndpoint.value
-$aiFoundryAccountEndpoint = $outputs.aiFoundryEndpoint.value.TrimEnd("/")
+# AI Foundry's own account metadata (`properties.endpoints["AI Foundry
+# API"]` / `["Content Understanding"]`) advertises
+# `<account>.services.ai.azure.com`, not the generic `aiFoundryEndpoint`
+# output's legacy `.cognitiveservices.azure.com` host - using the latter
+# for AIProjectClient/Content Understanding 404s on a freshly provisioned
+# account. `aiFoundryApiEndpoint` is the dedicated, deterministic output
+# for this (see infra/modules/ai-foundry.bicep).
+$aiFoundryAccountEndpoint = $outputs.aiFoundryApiEndpoint.value.TrimEnd("/")
 $aiFoundryProjectName = $outputs.aiFoundryProjectName.value
 $aiFoundryEndpoint = "$aiFoundryAccountEndpoint/api/projects/$aiFoundryProjectName"
 $containerAppsEnvironmentId = $outputs.containerAppsEnvironmentId.value
@@ -644,7 +651,11 @@ else {
     }
     Remove-Variable githubMcpToken -ErrorAction SilentlyContinue
 
-    $aiServicesEndpoint = $aiFoundryAccountEndpoint
+    # Speech Services routes stay on the legacy `.cognitiveservices.azure.com`
+    # host per Azure's own account metadata - unlike $aiFoundryAccountEndpoint
+    # above, this is deliberately sourced from the generic `aiFoundryEndpoint`
+    # output, not `aiFoundryApiEndpoint`.
+    $aiServicesEndpoint = $outputs.aiFoundryEndpoint.value.TrimEnd("/")
     $backendEnvironmentVariables = @(
         "GENIE_SERVICE_NAME=genie-backend",
         "GENIE_ENVIRONMENT=development",

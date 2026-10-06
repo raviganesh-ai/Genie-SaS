@@ -112,5 +112,24 @@ resource deployerCognitiveServicesUserRoleAssignment 'Microsoft.Authorization/ro
 }
 
 output endpoint string = foundryAccount.properties.endpoint
+// ASSUMPTION: `foundryAccount.properties.endpoint` (and the generic
+// `properties.endpoint` ARM field in general) returns the legacy
+// `<account>.cognitiveservices.azure.com` host - correct for capabilities
+// that still only route there (e.g. Speech Services, per
+// `GENIE_AZURE_SPEECH_ENDPOINT`'s usage in
+// backend/app/transcription/speech_service.py), but NOT the host AI
+// Foundry's own account metadata (`properties.endpoints["AI Foundry API"]`
+// / `properties.endpoints["Content Understanding"]`, confirmed live via
+// `az cognitiveservices account show` on 2026-10-06) actually advertises
+// for the AI Foundry project API and Content Understanding:
+// `<account>.services.ai.azure.com`. `customSubDomainName` above is fixed
+// to `accountName`, so that hostname is reserved for and resolves to this
+// exact account - constructing it directly (rather than indexing the
+// dynamic `properties.endpoints` map, which Bicep cannot do by display
+// name) is deterministic. Wiring the legacy host into
+// `GENIE_AZURE_FOUNDRY_ENDPOINT` instead of this one is what caused
+// Content Understanding's `/contentunderstanding/*` routes to 404 at
+// backend startup on a freshly provisioned account.
+output aiFoundryApiEndpoint string = 'https://${accountName}.services.ai.azure.com'
 output accountName string = foundryAccount.name
 output projectName string = foundryProject.name
