@@ -80,11 +80,7 @@ agents:
     memory_access:
       - shared
       - enterprise
-    # Explicit override, demonstrating per-agent LLM configurability. Set
-    # to the same model as the platform default today (gpt-5-1) because
-    # gpt-4o is deprecating on this account; change this to any other
-    # deployed model name to diverge from the default again.
-    model_deployment_ref: gpt-5-1
+    model_deployment_ref: gpt-5-mini
     foundry_agent_id: architecture-designer
     owner: architecture-team
     governance_policy_id: standard-governance-policy-v1

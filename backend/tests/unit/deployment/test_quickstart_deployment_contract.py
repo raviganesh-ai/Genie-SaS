@@ -78,6 +78,18 @@ def test_quickstart_supports_exact_resource_group_and_noninteractive_inputs() ->
     assert "empty(resourceGroupNameOverride)" in main_template
 
 
+def test_quickstart_defaults_every_agent_to_gpt_5_mini() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+    agent_registry = _read("config/agents/registry.yaml")
+
+    assert '[string]$DefaultLlmDeploymentName = "gpt-5-mini"' in script
+    assert '[string]$DefaultLlmModel = "gpt-5-mini"' in script
+    assert '[string]$DefaultLlmVersion = "2025-08-07"' in script
+    assert "-Default $DefaultLlmVersion" in script
+    assert "model_deployment_ref: gpt-5-1" not in agent_registry
+    assert agent_registry.count("model_deployment_ref: gpt-5-mini") == 2
+
+
 def test_quickstart_uses_the_current_foundry_provisioning_cli_contract() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
 

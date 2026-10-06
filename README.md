@@ -175,7 +175,7 @@ Every agent entry carries: `id`, `name`, `role`, `description`, `capabilities`, 
 
 ### Default LLM
 
-`Settings.default_llm` (env `GENIE_DEFAULT_LLM`) applies to any agent that doesn't declare its own `model_deployment_ref`. Currently `gpt-5-mini` by default (`architecture-designer` overrides to `gpt-5-1`, demonstrating per-agent LLM configurability). Anthropic Claude models were evaluated but require an Azure Marketplace subscription with non-zero SKU quota, which is not available by default.
+`Settings.default_llm` (env `GENIE_DEFAULT_LLM`) applies to any agent that doesn't declare its own `model_deployment_ref`. Quick-start defaults every agent to the `gpt-5-mini` deployment using model version `2025-08-07`; operators can explicitly override these deployment parameters. Anthropic Claude models were evaluated but require an Azure Marketplace subscription with non-zero SKU quota, which is not available by default.
 
 ---
 

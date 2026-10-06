@@ -102,9 +102,9 @@ param(
     [string]$GitHubMcpEndpoint = "https://api.githubcopilot.com/mcp/",
     [string]$PublisherEmail,
     [string]$PublisherName,
-    [string]$DefaultLlmDeploymentName,
-    [string]$DefaultLlmModel,
-    [string]$DefaultLlmVersion,
+    [string]$DefaultLlmDeploymentName = "gpt-5-mini",
+    [string]$DefaultLlmModel = "gpt-5-mini",
+    [string]$DefaultLlmVersion = "2025-08-07",
     [hashtable]$FoundryModelCatalog = @{},
     [switch]$NonInteractive,
     [switch]$SkipFrontendDeploy,
@@ -253,14 +253,9 @@ $publisherEmail = Read-RequiredValue -Prompt "APIM publisher email" -Default $Pu
 $publisherName = Read-RequiredValue -Prompt "APIM publisher display name" -Default $(if ($PublisherName) { $PublisherName } else { "Genie" })
 
 $modelDeployments = @()
-$defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default $(if ($DefaultLlmDeploymentName) { $DefaultLlmDeploymentName } else { "gpt-5-mini" })
-$defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default $(if ($DefaultLlmModel) { $DefaultLlmModel } else { "gpt-5-mini" })
-if ([string]::IsNullOrWhiteSpace($DefaultLlmVersion)) {
-    $defaultLlmVersion = Read-RequiredValue -Prompt "Model version (check 'az cognitiveservices model list --location $Location' if unsure)"
-}
-else {
-    $defaultLlmVersion = $DefaultLlmVersion
-}
+$defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default $DefaultLlmDeploymentName
+$defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default $DefaultLlmModel
+$defaultLlmVersion = Read-RequiredValue -Prompt "Model version (check 'az cognitiveservices model list --location $Location' if unsure)" -Default $DefaultLlmVersion
 $modelDeployments = @(
     @{ name = $defaultLlmDeploymentName; model = $defaultLlmModel; version = $defaultLlmVersion }
 )
