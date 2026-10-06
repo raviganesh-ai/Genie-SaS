@@ -178,21 +178,27 @@ if (-not $account) {
 }
 Write-Host "Signed in as: $($account.user.name)" -ForegroundColor Green
 Write-Host "Active subscription: $($account.name) ($($account.id))"
-$switchAccount = Read-Host "Use a different Azure account/subscription? (y/N)"
-if ($switchAccount -match '^(y|yes)$') {
-    az login | Out-Null
-    $account = Invoke-AzJson account show
-}
 
 if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
-    $subscriptions = Invoke-AzJson account list
-    if ($subscriptions.Count -gt 1) {
-        Write-Host "`nAvailable subscriptions for this account:"
-        for ($i = 0; $i -lt $subscriptions.Count; $i++) {
-            Write-Host "  [$i] $($subscriptions[$i].name) ($($subscriptions[$i].id))"
+    $switchAccount = Read-Host "Use a different Azure account/subscription? (y/N)"
+    if ($switchAccount -match '^(y|yes)$') {
+        az login | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Azure login failed."
         }
-        $index = Read-RequiredValue -Prompt "Pick a subscription by index" -Default "0"
-        $SubscriptionId = $subscriptions[[int]$index].id
+        $account = Invoke-AzJson account show
+        $subscriptions = Invoke-AzJson account list
+        if ($subscriptions.Count -gt 1) {
+            Write-Host "`nAvailable subscriptions for this account:"
+            for ($i = 0; $i -lt $subscriptions.Count; $i++) {
+                Write-Host "  [$i] $($subscriptions[$i].name) ($($subscriptions[$i].id))"
+            }
+            $index = Read-RequiredValue -Prompt "Pick a subscription by index" -Default "0"
+            $SubscriptionId = $subscriptions[[int]$index].id
+        }
+        else {
+            $SubscriptionId = $account.id
+        }
     }
     else {
         $SubscriptionId = $account.id

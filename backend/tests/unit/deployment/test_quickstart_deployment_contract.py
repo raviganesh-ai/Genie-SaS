@@ -31,6 +31,21 @@ def test_quickstart_orders_verified_parent_stages_before_dependents() -> None:
     assert "az ad signed-in-user show --query id" in script
 
 
+def test_quickstart_keeps_the_active_subscription_when_switch_is_declined() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+
+    identity_start = script.index('Write-Stage "Stage 0/10: confirm your Azure identity"')
+    identity_end = script.index('Write-Stage "Stage 1/10: collect deployment parameters"')
+    identity_stage = script[identity_start:identity_end]
+
+    assert 'Read-Host "Use a different Azure account/subscription? (y/N)"' in identity_stage
+    assert "if ($switchAccount -match '^(y|yes)$')" in identity_stage
+    assert "else {\n        $SubscriptionId = $account.id\n    }" in identity_stage
+    assert identity_stage.index("$subscriptions = Invoke-AzJson account list") < identity_stage.index(
+        "else {\n        $SubscriptionId = $account.id\n    }"
+    )
+
+
 def test_quickstart_configures_required_backend_runtime_dependencies() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
 
