@@ -66,6 +66,18 @@ def test_quickstart_configures_required_backend_runtime_dependencies() -> None:
         assert f"{setting}=" in script
 
 
+def test_quickstart_supports_exact_resource_group_and_noninteractive_inputs() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+    main_template = _read("infra/main.bicep")
+
+    assert "[string]$ResourceGroupName" in script
+    assert "[switch]$NonInteractive" in script
+    assert "resourceGroupNameOverride = @{ value = $ResourceGroupName }" in script
+    assert 'GetEnvironmentVariable("GENIE_GITHUB_MCP_TOKEN")' in script
+    assert "param resourceGroupNameOverride string = ''" in main_template
+    assert "empty(resourceGroupNameOverride)" in main_template
+
+
 def test_quickstart_uses_the_current_foundry_provisioning_cli_contract() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
 
@@ -99,3 +111,14 @@ def test_foundry_infrastructure_grants_the_quickstart_operator_data_plane_access
     assert "deployerPrincipalId: deployerPrincipalId" in main_template
     assert "deployerCognitiveServicesUserRoleAssignment" in foundry_module
     assert "if (!empty(deployerPrincipalId))" in foundry_module
+
+
+def test_key_vault_is_private_and_policy_compliant() -> None:
+    key_vault_module = _read("infra/modules/key-vault.bicep")
+    private_endpoint_module = _read("infra/modules/key-vault-private-endpoint.bicep")
+
+    assert "publicNetworkAccess: 'Disabled'" in key_vault_module
+    assert "defaultAction: 'Deny'" in key_vault_module
+    assert "key-vault-private-endpoint.bicep" in key_vault_module
+    assert "privatelink.vaultcore.azure.net" in private_endpoint_module
+    assert "'vault'" in private_endpoint_module

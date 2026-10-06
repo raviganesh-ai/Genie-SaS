@@ -98,6 +98,15 @@ param(
     [string]$EnvironmentName = "dev",
     [string]$Location = "eastus2",
     [string]$ResourcePrefix = "genie",
+    [string]$ResourceGroupName,
+    [string]$GitHubMcpEndpoint = "https://api.githubcopilot.com/mcp/",
+    [string]$PublisherEmail,
+    [string]$PublisherName,
+    [string]$DefaultLlmDeploymentName,
+    [string]$DefaultLlmModel,
+    [string]$DefaultLlmVersion,
+    [hashtable]$FoundryModelCatalog = @{},
+    [switch]$NonInteractive,
     [switch]$SkipFrontendDeploy,
     [switch]$RemovePreviousDeployment
 )
@@ -115,6 +124,12 @@ function Read-RequiredValue {
         [Parameter(Mandatory = $true)][string]$Prompt,
         [string]$Default
     )
+    if ($NonInteractive) {
+        if ([string]::IsNullOrWhiteSpace($Default)) {
+            throw "A non-interactive value is required for '$Prompt'."
+        }
+        return $Default
+    }
     $suffix = if ($Default) { " [$Default]" } else { "" }
     while ($true) {
         $value = Read-Host "$Prompt$suffix"
@@ -226,28 +241,29 @@ Write-Host "`nGenie's backend connects to GitHub repositories through a GitHub M
 Write-Host "server using a token YOU provide - never a token belonging to anyone else." -ForegroundColor White
 Write-Host "Create a fine-grained Personal Access Token at https://github.com/settings/tokens" -ForegroundColor White
 Write-Host "(read-only repo scopes are enough unless you plan to test branch/PR creation)." -ForegroundColor White
-$githubMcpToken = Read-SecretValue -Prompt "GitHub Personal Access Token"
-$githubMcpEndpoint = Read-RequiredValue -Prompt "GitHub MCP endpoint" -Default "https://api.githubcopilot.com/mcp/"
+$githubMcpToken = [Environment]::GetEnvironmentVariable("GENIE_GITHUB_MCP_TOKEN")
+if ([string]::IsNullOrWhiteSpace($githubMcpToken)) {
+    $githubMcpToken = Read-SecretValue -Prompt "GitHub Personal Access Token"
+}
+$githubMcpEndpoint = Read-RequiredValue -Prompt "GitHub MCP endpoint" -Default $GitHubMcpEndpoint
 
 Write-Host "`nAzure API Management requires a publisher contact - this is shown on" -ForegroundColor White
 Write-Host "developer-portal/error pages, never used for anything else." -ForegroundColor White
-$publisherEmail = Read-RequiredValue -Prompt "APIM publisher email"
-$publisherName = Read-RequiredValue -Prompt "APIM publisher display name" -Default "Genie"
+$publisherEmail = Read-RequiredValue -Prompt "APIM publisher email" -Default $PublisherEmail
+$publisherName = Read-RequiredValue -Prompt "APIM publisher display name" -Default $(if ($PublisherName) { $PublisherName } else { "Genie" })
 
-$deployModel = Read-Host "Deploy a default LLM to Azure AI Foundry as part of this run? (Y/n)"
 $modelDeployments = @()
-$defaultLlmDeploymentName = $null
-if (-not ($deployModel -match '^(n|no)$')) {
-    $defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default "gpt-5-mini"
-    $defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default "gpt-5-mini"
+$defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default $(if ($DefaultLlmDeploymentName) { $DefaultLlmDeploymentName } else { "gpt-5-mini" })
+$defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default $(if ($DefaultLlmModel) { $DefaultLlmModel } else { "gpt-5-mini" })
+if ([string]::IsNullOrWhiteSpace($DefaultLlmVersion)) {
     $defaultLlmVersion = Read-RequiredValue -Prompt "Model version (check 'az cognitiveservices model list --location $Location' if unsure)"
-    $modelDeployments = @(
-        @{ name = $defaultLlmDeploymentName; model = $defaultLlmModel; version = $defaultLlmVersion }
-    )
 }
 else {
-    throw "Quick-start requires a deployed default LLM so the backend and Foundry agents can pass readiness. Use the manual deployment path in docs/DEPLOYMENT.md to reuse an existing model."
+    $defaultLlmVersion = $DefaultLlmVersion
 }
+$modelDeployments = @(
+    @{ name = $defaultLlmDeploymentName; model = $defaultLlmModel; version = $defaultLlmVersion }
+)
 
 # ---------------------------------------------------------------------------
 # Stage 2: offer to remove a previous Genie deployment for this exact
@@ -262,6 +278,7 @@ Write-Stage "Stage 2/10: check for a previous deployment to remove first"
     -SubscriptionId $SubscriptionId `
     -EnvironmentName $EnvironmentName `
     -ResourcePrefix $ResourcePrefix `
+    -ResourceGroupName $ResourceGroupName `
     -Location $Location `
     -Yes:$RemovePreviousDeployment
 if ($LASTEXITCODE -ne 0) {
@@ -305,8 +322,9 @@ foreach ($requiredDeploymentName in $requiredAgentModels) {
         continue
     }
     Write-Host "`nAgent configuration also requires model deployment '$requiredDeploymentName'." -ForegroundColor White
-    $requiredModelName = Read-RequiredValue -Prompt "Azure model name for '$requiredDeploymentName'"
-    $requiredModelVersion = Read-RequiredValue -Prompt "Model version for '$requiredDeploymentName' (check 'az cognitiveservices model list --location $Location')"
+    $configuredModel = $FoundryModelCatalog[$requiredDeploymentName]
+    $requiredModelName = Read-RequiredValue -Prompt "Azure model name for '$requiredDeploymentName'" -Default $configuredModel.model
+    $requiredModelVersion = Read-RequiredValue -Prompt "Model version for '$requiredDeploymentName' (check 'az cognitiveservices model list --location $Location')" -Default $configuredModel.version
     $modelDeployments += @{
         name = $requiredDeploymentName
         model = $requiredModelName
@@ -342,6 +360,7 @@ $armParameters = @{
         environmentName         = @{ value = $EnvironmentName }
         location                = @{ value = $Location }
         resourcePrefix           = @{ value = $ResourcePrefix }
+        resourceGroupNameOverride = @{ value = $ResourceGroupName }
         deployerPrincipalId       = @{ value = $deployerPrincipalId }
         foundryModelDeployments  = @{ value = $modelDeployments }
     }

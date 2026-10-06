@@ -107,6 +107,8 @@ module keyVault 'key-vault.bicep' = {
     // Key Vault names must be <= 24 chars and globally unique.
     name: take('${resourcePrefix}kv${resourceToken}', 24)
     managedIdentityPrincipalId: managedIdentity.outputs.principalId
+    virtualNetworkId: virtualNetwork.outputs.id
+    privateEndpointSubnetId: virtualNetwork.outputs.privateEndpointSubnetId
     tags: tags
   }
 }
@@ -232,5 +234,4 @@ output containerRegistryName string = deployContainerRegistryAndBackendApp ? con
 output containerRegistryLoginServer string = deployContainerRegistryAndBackendApp ? containerRegistry!.outputs.loginServer : ''
 output backendContainerAppName string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.name : ''
 output backendContainerAppFqdn string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.fqdn : ''
-
 

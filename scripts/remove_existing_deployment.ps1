@@ -75,6 +75,8 @@ param(
 
     [string]$ResourcePrefix = "genie",
 
+    [string]$ResourceGroupName,
+
     [Parameter(Mandatory = $true)]
     [string]$Location,
 
@@ -93,7 +95,12 @@ function Invoke-AzJson {
     return $output | ConvertFrom-Json -Depth 100
 }
 
-$resourceGroupName = "$ResourcePrefix-$EnvironmentName-rg"
+$resourceGroupName = if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {
+    "$ResourcePrefix-$EnvironmentName-rg"
+}
+else {
+    $ResourceGroupName
+}
 
 Write-Host "`n=== Checking for a previous Genie deployment ===" -ForegroundColor Cyan
 Write-Host "Resource group (derived the same way infra/main.bicep derives it): $resourceGroupName"

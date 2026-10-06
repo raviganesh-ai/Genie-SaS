@@ -6,6 +6,8 @@
 param location string
 param name string
 param managedIdentityPrincipalId string
+param virtualNetworkId string
+param privateEndpointSubnetId string
 param tags object
 
 // Built-in role definition id for "Key Vault Secrets User" - read-only
@@ -26,6 +28,23 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
     enablePurgeProtection: true
+    publicNetworkAccess: 'Disabled'
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Deny'
+    }
+  }
+}
+
+module privateEndpoint 'key-vault-private-endpoint.bicep' = {
+  name: 'genie-key-vault-private-endpoint'
+  params: {
+    location: location
+    keyVaultId: keyVault.id
+    keyVaultName: keyVault.name
+    virtualNetworkId: virtualNetworkId
+    privateEndpointSubnetId: privateEndpointSubnetId
+    tags: tags
   }
 }
 

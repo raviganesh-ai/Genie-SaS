@@ -46,6 +46,9 @@ param apiManagementSubnetPrefix string = '10.20.4.0/24'
 @maxLength(8)
 param resourcePrefix string = 'genie'
 
+@description('Optional exact resource group name. When empty, uses `<resourcePrefix>-<environmentName>-rg`.')
+param resourceGroupNameOverride string = ''
+
 @description('Object id of the operator running quick-start. Granted Cognitive Services User on the new Foundry account so the out-of-band agent provisioning stage can create and verify Prompt Agents.')
 param deployerPrincipalId string = ''
 
@@ -66,7 +69,7 @@ param containerRegistrySkuName string = 'Basic'
 // Deterministic, collision-resistant suffix derived from the subscription
 // and environment name - never a hardcoded/customer-specific value.
 var resourceToken = uniqueString(subscription().id, environmentName, location)
-var resourceGroupName = '${resourcePrefix}-${environmentName}-rg'
+var resourceGroupName = empty(resourceGroupNameOverride) ? '${resourcePrefix}-${environmentName}-rg' : resourceGroupNameOverride
 var tags = {
   application: 'genie'
   environment: environmentName
