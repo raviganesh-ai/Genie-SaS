@@ -14,6 +14,12 @@
 # region leaves its `/contentunderstanding/*` routes unavailable, and the
 # backend Container App crash-loops at startup instead of ever becoming
 # ready (DocumentUnderstandingError: 404 Not Found).
+#
+# Deliberately NOT under config/deployment/: that directory is scanned
+# recursively (app.utils.yaml_loader.iter_yaml_files) by
+# load_resource_provider_requirements, which requires every YAML file it
+# finds there to define a top-level `resource_providers` list - this file's
+# own top-level key broke that scan when it briefly lived there.
 content_understanding_regions:
   - australiaeast
   - canadacentral

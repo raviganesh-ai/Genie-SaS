@@ -222,7 +222,7 @@ def test_foundry_endpoint_uses_the_services_ai_azure_com_host() -> None:
 
 def test_quickstart_validates_content_understanding_region_support() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
-    registry_path = _REPO_ROOT / "config/deployment/content_understanding_regions.yaml"
+    registry_path = _REPO_ROOT / "config/regions/content_understanding_regions.yaml"
     registry = registry_path.read_text(encoding="utf-8")
 
     assert "function Get-ContentUnderstandingSupportedRegions" in script

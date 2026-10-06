@@ -72,7 +72,7 @@
     Foundry/model availability in your chosen region before accepting.
     Interactive runs present this as a numbered selection list restricted to
     regions Azure Content Understanding supports (see
-    config/deployment/content_understanding_regions.yaml), never free text;
+    config/regions/content_understanding_regions.yaml), never free text;
     this script fails closed before provisioning anything if a non-interactive
     value is not on that list, since Content Understanding is a mandatory
     backend startup dependency.
@@ -168,7 +168,7 @@ function Invoke-AzJson {
 function Get-ContentUnderstandingSupportedRegions {
     param([Parameter(Mandatory = $true)][string]$RepoRoot)
 
-    $registryPath = Join-Path $RepoRoot "config\deployment\content_understanding_regions.yaml"
+    $registryPath = Join-Path $RepoRoot "config\regions\content_understanding_regions.yaml"
     if (-not (Test-Path $registryPath)) {
         throw "Content Understanding region registry not found at '$registryPath'."
     }
@@ -193,7 +193,7 @@ function Assert-ContentUnderstandingSupportedRegion {
     if ($Location -notin $supportedRegions) {
         throw (
             "Azure region '$Location' does not support Content Understanding, a mandatory " +
-            "backend startup dependency (see $RepoRoot\config\deployment\content_understanding_regions.yaml). Choose one of: " +
+            "backend startup dependency (see $RepoRoot\config\regions\content_understanding_regions.yaml). Choose one of: " +
             ($supportedRegions -join ', ')
         )
     }
