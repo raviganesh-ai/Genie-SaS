@@ -120,6 +120,7 @@ agents:
     allowed_tools: []
     memory_access:
       - shared
+    model_deployment_ref: gpt-5-mini
     foundry_agent_id: build-agent
     owner: architecture-team
     governance_policy_id: standard-governance-policy-v1
