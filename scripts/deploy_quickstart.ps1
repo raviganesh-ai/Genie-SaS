@@ -88,6 +88,23 @@
     Content Understanding - every other resource still deploys into
     Location, unchanged, in the same resource group.
 
+.PARAMETER EmbeddingDeploymentName
+    Deployment name for the embedding model Azure Content Understanding's
+    `prebuilt-documentSearch` analyzer requires alongside the completion
+    model (DefaultLlmDeploymentName) - without one, the backend fails
+    closed at startup with a 400 from `/contentunderstanding/defaults`
+    (that endpoint has no model mapped yet). Default:
+    "text-embedding-3-large". Deployed on the Foundry account the same way
+    as the completion model, then mapped via
+    scripts/configure_content_understanding.ps1, which this script runs
+    automatically in Stage 7.
+
+.PARAMETER EmbeddingModelName
+    Azure model name for the embedding deployment above. Default:
+    "text-embedding-3-large" - must be one of
+    `prebuilt-documentSearch`'s supported embedding models (see
+    scripts/configure_content_understanding.ps1).
+
 .PARAMETER ResourcePrefix
     Short prefix applied to every resource name. Default: "genie".
 
@@ -122,6 +139,8 @@ param(
     [string]$PublisherName,
     [string]$DefaultLlmDeploymentName = "gpt-5-mini",
     [string]$DefaultLlmModel = "gpt-5-mini",
+    [string]$EmbeddingDeploymentName = "text-embedding-3-large",
+    [string]$EmbeddingModelName = "text-embedding-3-large",
     [hashtable]$FoundryModelCatalog = @{},
     [switch]$NonInteractive,
     [switch]$SkipFrontendDeploy,
@@ -459,15 +478,30 @@ $publisherName = Read-RequiredValue -Prompt "APIM publisher display name" -Defau
 
 $defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default $DefaultLlmDeploymentName
 $defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default $DefaultLlmModel
+$embeddingDeploymentName = Read-RequiredValue -Prompt "Embedding deployment name (required by Content Understanding)" -Default $EmbeddingDeploymentName
+$embeddingModelName = Read-RequiredValue -Prompt "Embedding model name" -Default $EmbeddingModelName
 $azureModelCatalog = @(
     Invoke-AzJson cognitiveservices model list --location $FoundryLocation
 )
+# Content Understanding's prebuilt-documentSearch analyzer requires BOTH a
+# completion and an embedding model mapped as account-level defaults
+# (scripts/configure_content_understanding.ps1, invoked in Stage 7) -
+# without the embedding deployment below, that mapping can never succeed
+# and the backend fails closed at startup with a 400 from
+# /contentunderstanding/defaults.
+$completionModelDeployment = Resolve-LatestAzureModelDeployment `
+    -DeploymentName $defaultLlmDeploymentName `
+    -ModelName $defaultLlmModel `
+    -Catalog $azureModelCatalog `
+    -Region $FoundryLocation
+$embeddingModelDeployment = Resolve-LatestAzureModelDeployment `
+    -DeploymentName $embeddingDeploymentName `
+    -ModelName $embeddingModelName `
+    -Catalog $azureModelCatalog `
+    -Region $FoundryLocation
 $modelDeployments = @(
-    Resolve-LatestAzureModelDeployment `
-        -DeploymentName $defaultLlmDeploymentName `
-        -ModelName $defaultLlmModel `
-        -Catalog $azureModelCatalog `
-        -Region $FoundryLocation
+    $completionModelDeployment
+    $embeddingModelDeployment
 )
 
 # ---------------------------------------------------------------------------
@@ -671,6 +705,7 @@ $cosmosDbEndpoint = $outputs.cosmosDbEndpoint.value
 # account. `aiFoundryApiEndpoint` is the dedicated, deterministic output
 # for this (see infra/modules/ai-foundry.bicep).
 $aiFoundryAccountEndpoint = $outputs.aiFoundryApiEndpoint.value.TrimEnd("/")
+$aiFoundryAccountName = $outputs.aiFoundryAccountName.value
 $aiFoundryProjectName = $outputs.aiFoundryProjectName.value
 $aiFoundryEndpoint = "$aiFoundryAccountEndpoint/api/projects/$aiFoundryProjectName"
 $containerAppsEnvironmentId = $outputs.containerAppsEnvironmentId.value
@@ -753,6 +788,29 @@ try {
 }
 finally {
     Pop-Location
+}
+
+# Content Understanding's prebuilt-documentSearch analyzer requires a
+# completion AND an embedding model mapped as account-level defaults
+# before its /contentunderstanding/defaults endpoint will return anything
+# but 400 Bad Request - and the backend calls that endpoint unconditionally
+# at startup (backend/app/services/document_understanding_service.py),
+# failing closed if it isn't configured. Both models were already deployed
+# on the Foundry account above (Stage 4); this maps them as the analyzer's
+# required defaults.
+Write-Host "`nConfiguring Content Understanding model defaults..." -ForegroundColor Cyan
+& (Join-Path $repoRoot "scripts\configure_content_understanding.ps1") `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroup $resourceGroup `
+    -AccountName $aiFoundryAccountName `
+    -CompletionDeploymentName $completionModelDeployment.name `
+    -CompletionModelName $completionModelDeployment.model `
+    -CompletionModelVersion $completionModelDeployment.version `
+    -EmbeddingDeploymentName $embeddingModelDeployment.name `
+    -EmbeddingModelName $embeddingModelDeployment.model `
+    -EmbeddingModelVersion $embeddingModelDeployment.version
+if ($LASTEXITCODE -ne 0) {
+    throw "Content Understanding model defaults configuration failed."
 }
 
 # ---------------------------------------------------------------------------

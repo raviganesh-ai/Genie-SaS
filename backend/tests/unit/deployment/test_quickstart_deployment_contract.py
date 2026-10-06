@@ -31,6 +31,44 @@ def test_quickstart_orders_verified_parent_stages_before_dependents() -> None:
     assert "az ad signed-in-user show --query id" in script
 
 
+def test_quickstart_deploys_and_configures_content_understanding_model_defaults() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+
+    # prebuilt-documentSearch requires BOTH a completion and an embedding
+    # model mapped as account-level defaults, or /contentunderstanding/
+    # defaults returns 400 and the backend fails closed at startup
+    # (backend/app/services/document_understanding_service.py). Neither
+    # was ever provisioned/configured by quick-start before this fix.
+    assert '[string]$EmbeddingDeploymentName = "text-embedding-3-large"' in script
+    assert '[string]$EmbeddingModelName = "text-embedding-3-large"' in script
+    assert "$completionModelDeployment = Resolve-LatestAzureModelDeployment" in script
+    assert "$embeddingModelDeployment = Resolve-LatestAzureModelDeployment" in script
+    assert "$modelDeployments = @(" in script
+    assert "$completionModelDeployment\n    $embeddingModelDeployment" in script
+    assert "$aiFoundryAccountName = $outputs.aiFoundryAccountName.value" in script
+
+    config_call = script[
+        script.index('Write-Host "`nConfiguring Content Understanding model defaults')
+        : script.index('Stage 8/10: preserving the provisioned backend')
+    ]
+    assert 'scripts\\configure_content_understanding.ps1' in config_call
+    assert "-AccountName $aiFoundryAccountName" in config_call
+    assert "-CompletionDeploymentName $completionModelDeployment.name" in config_call
+    assert "-CompletionModelVersion $completionModelDeployment.version" in config_call
+    assert "-EmbeddingDeploymentName $embeddingModelDeployment.name" in config_call
+    assert "-EmbeddingModelVersion $embeddingModelDeployment.version" in config_call
+    assert 'throw "Content Understanding model defaults configuration failed."' in config_call
+
+    # Must run after Foundry agent provisioning succeeds and before the
+    # real backend is ever expected to pass its readiness probe.
+    assert script.index('throw "Foundry agent live synchronization failed."') < script.index(
+        'Write-Host "`nConfiguring Content Understanding model defaults'
+    )
+    assert script.index('Write-Host "`nConfiguring Content Understanding model defaults') < script.index(
+        'Stage 8/10: configuring and rolling out the real backend'
+    )
+
+
 def test_quickstart_keeps_the_active_subscription_when_switch_is_declined() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
 

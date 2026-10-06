@@ -223,9 +223,11 @@ All four require `GENIE_AZURE_FOUNDRY_ENDPOINT` / `GENIE_AZURE_FOUNDRY_PROJECT_N
    npx @azure/static-web-apps-cli deploy dist --deployment-token $token --env production
    ```
 
-### 7. Content Understanding (optional)
+### 7. Content Understanding (required for Discovery; automatic under quick-start)
 
-Content Understanding (Discovery document/image evidence ingestion) requires completion and embedding model aliases on the AIServices resource. Configure them once per environment with externally supplied deployment/model names:
+> `scripts/deploy_quickstart.ps1` runs this step automatically (Stage 7, right after Foundry agent provisioning) using the completion and embedding models it already deployed in Stage 4. This manual command is only needed for the manual/advanced path above, or to reconfigure an environment quick-start didn't provision.
+
+Content Understanding (Discovery document/image evidence ingestion) requires completion and embedding model aliases on the AIServices resource - without them, `/contentunderstanding/defaults` returns 400 and the backend fails closed at startup (`backend/app/services/document_understanding_service.py`). Configure them once per environment with externally supplied deployment/model names:
 
 ```powershell
 ./scripts/configure_content_understanding.ps1 `
