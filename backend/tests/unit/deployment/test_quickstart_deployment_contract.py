@@ -78,6 +78,30 @@ def test_quickstart_supports_exact_resource_group_and_noninteractive_inputs() ->
     assert "empty(resourceGroupNameOverride)" in main_template
 
 
+def test_quickstart_reuses_an_existing_resource_groups_own_location() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+    main_template = _read("infra/main.bicep")
+
+    # Azure disallows changing an already-existing resource group's own
+    # location - declaring it with a different -Location than it was
+    # created with (e.g. after declining deletion of a previous run in a
+    # different region) fails the whole deployment before any child
+    # resource is touched. The dedicated resourceGroupLocation parameter
+    # lets the resourceGroup resource be a no-op for an existing group
+    # while every child resource still deploys into the newly selected
+    # location, within that same resource group.
+    assert "param resourceGroupLocation string = location" in main_template
+    assert "location: resourceGroupLocation" in main_template
+    assert "location: location" not in main_template.split("resource resourceGroup ")[1].split("}")[0]
+
+    assert "az group show" in script
+    assert "$resourceGroupLocation = $Location" in script
+    assert "$resourceGroupLocation = $existingResourceGroup.location" in script
+    assert "resourceGroupLocation    = @{ value = $resourceGroupLocation }" in script
+    assert script.index("$expectedResourceGroup = if") < script.index("az group show")
+    assert script.index("az group show") < script.index("Write-Stage \"Stage 4/10")
+
+
 def test_quickstart_defaults_every_agent_to_gpt_5_mini() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
     agent_registry = _read("config/agents/registry.yaml")

@@ -472,6 +472,34 @@ $expectedResourceGroup = if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {
 else {
     $ResourceGroupName
 }
+
+# Azure does not allow changing an existing resource group's own location -
+# if a previous run's resource group was kept (e.g. its deletion was
+# declined above) and a different -Location is chosen this time, deploying
+# infra/main.bicep with that new location on the resourceGroup resource
+# itself would fail the entire deployment before any child resource is
+# touched. Detect that case and pin the Bicep template's dedicated
+# resourceGroupLocation parameter to the group's actual, unchanged location
+# so the deployment is a no-op for the group itself; every child resource
+# (Foundry, Cosmos DB, AI Search, VNet, Key Vault, Container Apps, etc.)
+# still deploys into the newly selected $Location, within that same
+# existing resource group.
+$existingResourceGroupJson = & az group show `
+    --subscription $SubscriptionId `
+    --name $expectedResourceGroup `
+    --only-show-errors `
+    -o json 2>$null
+$resourceGroupLocation = $Location
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingResourceGroupJson)) {
+    $existingResourceGroup = $existingResourceGroupJson | ConvertFrom-Json -Depth 10
+    $resourceGroupLocation = $existingResourceGroup.location
+    if ($resourceGroupLocation -ne $Location) {
+        Write-Host "`nResource group '$expectedResourceGroup' already exists in '$resourceGroupLocation'." -ForegroundColor Yellow
+        Write-Host "Its own location cannot be changed, so it is left as-is; every resource provisioned" -ForegroundColor Yellow
+        Write-Host "by this run will still use your selected region, '$Location', within that same group." -ForegroundColor Yellow
+    }
+}
+
 $provisionedBackend = Find-ProvisionedGenieBackend `
     -SubscriptionId $SubscriptionId `
     -ResourceGroup $expectedResourceGroup
@@ -578,6 +606,7 @@ $armParameters = @{
     parameters     = @{
         environmentName         = @{ value = $EnvironmentName }
         location                = @{ value = $Location }
+        resourceGroupLocation    = @{ value = $resourceGroupLocation }
         resourcePrefix           = @{ value = $ResourcePrefix }
         resourceGroupNameOverride = @{ value = $ResourceGroupName }
         deployerPrincipalId       = @{ value = $deployerPrincipalId }

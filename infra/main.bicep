@@ -26,6 +26,9 @@ param environmentName string
 @description('Azure region every resource is deployed into.')
 param location string
 
+@description('Azure region used ONLY for the resource group\'s own location property - defaults to `location`. Azure does not allow changing an existing resource group\'s location, so when redeploying into an already-existing resource group (e.g. a previous run in a different region whose deletion was declined), pass that resource group\'s actual, unchanged location here while `location` continues to drive every child resource. Leaving this at its default is correct for a brand-new resource group.')
+param resourceGroupLocation string = location
+
 @description('Azure region for Azure AI Search. Defaults to `location`; override this independently if AI Search lacks capacity in the primary region.')
 param aiSearchLocation string = location
 
@@ -83,7 +86,7 @@ var tags = {
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
-  location: location
+  location: resourceGroupLocation
   tags: tags
 }
 
