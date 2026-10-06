@@ -84,10 +84,20 @@ def test_quickstart_defaults_every_agent_to_gpt_5_mini() -> None:
 
     assert '[string]$DefaultLlmDeploymentName = "gpt-5-mini"' in script
     assert '[string]$DefaultLlmModel = "gpt-5-mini"' in script
-    assert '[string]$DefaultLlmVersion = "2025-08-07"' in script
-    assert "-Default $DefaultLlmVersion" in script
     assert "model_deployment_ref: gpt-5-1" not in agent_registry
     assert agent_registry.count("model_deployment_ref: gpt-5-mini") == 2
+
+
+def test_quickstart_resolves_the_latest_regional_model_version() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+
+    assert "Invoke-AzJson cognitiveservices model list --location $Location" in script
+    assert "function Resolve-LatestAzureModelDeployment" in script
+    assert "$_.model.name -eq $ModelName" in script
+    assert "Get-ModelVersionSortKey -Version $_.model.version" in script
+    assert "version = $selectedModel.model.version" in script
+    assert "Model version (check" not in script
+    assert "[string]$DefaultLlmVersion" not in script
 
 
 def test_quickstart_uses_the_current_foundry_provisioning_cli_contract() -> None:

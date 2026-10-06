@@ -104,7 +104,6 @@ param(
     [string]$PublisherName,
     [string]$DefaultLlmDeploymentName = "gpt-5-mini",
     [string]$DefaultLlmModel = "gpt-5-mini",
-    [string]$DefaultLlmVersion = "2025-08-07",
     [hashtable]$FoundryModelCatalog = @{},
     [switch]$NonInteractive,
     [switch]$SkipFrontendDeploy,
@@ -158,6 +157,62 @@ function Invoke-AzJson {
         throw "Azure CLI command failed: az $($Arguments -join ' ')"
     }
     return $output | ConvertFrom-Json -Depth 100
+}
+
+function Get-ModelVersionSortKey {
+    param([Parameter(Mandatory = $true)][string]$Version)
+
+    $dateVersion = [datetime]::MinValue
+    if ([datetime]::TryParseExact(
+        $Version,
+        "yyyy-MM-dd",
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::None,
+        [ref]$dateVersion
+    )) {
+        return "2:$($dateVersion.Ticks.ToString('D20'))"
+    }
+
+    $numericVersion = [long]0
+    if ([long]::TryParse($Version, [ref]$numericVersion)) {
+        return "1:$($numericVersion.ToString('D20'))"
+    }
+
+    return "0:$Version"
+}
+
+function Resolve-LatestAzureModelDeployment {
+    param(
+        [Parameter(Mandatory = $true)][string]$DeploymentName,
+        [Parameter(Mandatory = $true)][string]$ModelName,
+        [Parameter(Mandatory = $true)][object[]]$Catalog
+    )
+
+    $availableModels = @(
+        $Catalog |
+            Where-Object {
+                $_.model.name -eq $ModelName -and
+                -not [string]::IsNullOrWhiteSpace($_.model.version)
+            }
+    )
+    if ($availableModels.Count -eq 0) {
+        throw "Azure model '$ModelName' is not available in region '$Location' for the selected subscription."
+    }
+
+    $selectedModel = $availableModels |
+        Sort-Object -Property @{
+            Expression = { Get-ModelVersionSortKey -Version $_.model.version }
+            Descending = $true
+        } |
+        Select-Object -First 1
+
+    Write-Host "Resolved Azure model '$ModelName' to latest version '$($selectedModel.model.version)' in '$Location'." -ForegroundColor Green
+    return @{
+        name = $DeploymentName
+        model = $ModelName
+        version = $selectedModel.model.version
+        format = $selectedModel.model.format
+    }
 }
 
 Write-Host @"
@@ -252,12 +307,16 @@ Write-Host "developer-portal/error pages, never used for anything else." -Foregr
 $publisherEmail = Read-RequiredValue -Prompt "APIM publisher email" -Default $PublisherEmail
 $publisherName = Read-RequiredValue -Prompt "APIM publisher display name" -Default $(if ($PublisherName) { $PublisherName } else { "Genie" })
 
-$modelDeployments = @()
 $defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default $DefaultLlmDeploymentName
 $defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default $DefaultLlmModel
-$defaultLlmVersion = Read-RequiredValue -Prompt "Model version (check 'az cognitiveservices model list --location $Location' if unsure)" -Default $DefaultLlmVersion
+$azureModelCatalog = @(
+    Invoke-AzJson cognitiveservices model list --location $Location
+)
 $modelDeployments = @(
-    @{ name = $defaultLlmDeploymentName; model = $defaultLlmModel; version = $defaultLlmVersion }
+    Resolve-LatestAzureModelDeployment `
+        -DeploymentName $defaultLlmDeploymentName `
+        -ModelName $defaultLlmModel `
+        -Catalog $azureModelCatalog
 )
 
 # ---------------------------------------------------------------------------
@@ -319,12 +378,10 @@ foreach ($requiredDeploymentName in $requiredAgentModels) {
     Write-Host "`nAgent configuration also requires model deployment '$requiredDeploymentName'." -ForegroundColor White
     $configuredModel = $FoundryModelCatalog[$requiredDeploymentName]
     $requiredModelName = Read-RequiredValue -Prompt "Azure model name for '$requiredDeploymentName'" -Default $configuredModel.model
-    $requiredModelVersion = Read-RequiredValue -Prompt "Model version for '$requiredDeploymentName' (check 'az cognitiveservices model list --location $Location')" -Default $configuredModel.version
-    $modelDeployments += @{
-        name = $requiredDeploymentName
-        model = $requiredModelName
-        version = $requiredModelVersion
-    }
+    $modelDeployments += Resolve-LatestAzureModelDeployment `
+        -DeploymentName $requiredDeploymentName `
+        -ModelName $requiredModelName `
+        -Catalog $azureModelCatalog
 }
 $env:GENIE_DEPLOY_SUBSCRIPTION_ID = $SubscriptionId
 Push-Location $repoRoot
