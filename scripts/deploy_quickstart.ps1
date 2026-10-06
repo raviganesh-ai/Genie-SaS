@@ -69,7 +69,11 @@
 
 .PARAMETER Location
     Azure region for every resource. Default: "eastus2" - confirm Azure AI
-    Foundry/model availability in your chosen region before accepting.
+    Foundry/model availability in your chosen region before accepting. Must
+    also be a region Azure Content Understanding supports (see
+    config/deployment/content_understanding_regions.yaml) - this script
+    fails closed before provisioning anything if it is not, since Content
+    Understanding is a mandatory backend startup dependency.
 
 .PARAMETER ResourcePrefix
     Short prefix applied to every resource name. Default: "genie".
@@ -157,6 +161,33 @@ function Invoke-AzJson {
         throw "Azure CLI command failed: az $($Arguments -join ' ')"
     }
     return $output | ConvertFrom-Json -Depth 100
+}
+
+function Assert-ContentUnderstandingSupportedRegion {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Location
+    )
+
+    $registryPath = Join-Path $RepoRoot "config\deployment\content_understanding_regions.yaml"
+    if (-not (Test-Path $registryPath)) {
+        throw "Content Understanding region registry not found at '$registryPath'."
+    }
+    $supportedRegions = @(
+        Get-Content -Path $registryPath |
+            Where-Object { $_ -match '^\s*-\s*(\S+)\s*$' } |
+            ForEach-Object { $matches[1] }
+    )
+    if ($supportedRegions.Count -eq 0) {
+        throw "Content Understanding region registry at '$registryPath' is empty."
+    }
+    if ($Location -notin $supportedRegions) {
+        throw (
+            "Azure region '$Location' does not support Content Understanding, a mandatory " +
+            "backend startup dependency (see $registryPath). Choose one of: " +
+            ($supportedRegions -join ', ')
+        )
+    }
 }
 
 function Get-ModelVersionSortKey {
@@ -357,6 +388,7 @@ Write-Host "Deploying into subscription: $SubscriptionId" -ForegroundColor Green
 Write-Stage "Stage 1/10: collect deployment parameters"
 $EnvironmentName = Read-RequiredValue -Prompt "Environment name" -Default $EnvironmentName
 $Location = Read-RequiredValue -Prompt "Azure region" -Default $Location
+Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location
 $ResourcePrefix = Read-RequiredValue -Prompt "Resource name prefix" -Default $ResourcePrefix
 
 $githubMcpEndpoint = Read-RequiredValue -Prompt "GitHub MCP endpoint" -Default $GitHubMcpEndpoint

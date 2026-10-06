@@ -196,6 +196,20 @@ def test_foundry_endpoint_uses_the_services_ai_azure_com_host() -> None:
     assert '$aiServicesEndpoint = $outputs.aiFoundryEndpoint.value.TrimEnd("/")' in script
 
 
+def test_quickstart_validates_content_understanding_region_support() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+    registry_path = _REPO_ROOT / "config/deployment/content_understanding_regions.yaml"
+    registry = registry_path.read_text(encoding="utf-8")
+
+    assert "function Assert-ContentUnderstandingSupportedRegion" in script
+    assert "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location" in script
+    assert script.index("$Location = Read-RequiredValue") < script.index(
+        "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location"
+    )
+    assert "- eastus2" in registry
+    assert "- centralus" not in registry
+
+
 def test_key_vault_is_private_and_policy_compliant() -> None:
     key_vault_module = _read("infra/modules/key-vault.bicep")
     private_endpoint_module = _read("infra/modules/key-vault-private-endpoint.bicep")

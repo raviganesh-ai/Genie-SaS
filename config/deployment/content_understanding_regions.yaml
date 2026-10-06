@@ -1,0 +1,29 @@
+# Azure regions where Azure Content Understanding (in Foundry Tools) is
+# available, per
+# https://learn.microsoft.com/azure/ai-services/content-understanding/language-region-support
+# (confirmed live against that page on 2026-10-06).
+#
+# Content Understanding is a mandatory, fail-closed backend startup
+# dependency - production startup calls
+# `document_understanding_service.validate_ready()` unconditionally (see
+# backend/app/main.py), and `POST /sessions/{id}/uploads/{transcript|
+# supporting_document}` depends on it at runtime (see
+# backend/app/api/uploads.py). scripts/deploy_quickstart.ps1 validates its
+# `-Location` parameter against this list BEFORE provisioning any
+# infrastructure: deploying the Azure AI Foundry account to an unsupported
+# region leaves its `/contentunderstanding/*` routes unavailable, and the
+# backend Container App crash-loops at startup instead of ever becoming
+# ready (DocumentUnderstandingError: 404 Not Found).
+content_understanding_regions:
+  - australiaeast
+  - canadacentral
+  - eastus
+  - eastus2
+  - japaneast
+  - southcentralus
+  - southeastasia
+  - swedencentral
+  - uksouth
+  - westeurope
+  - westus
+  - westus3
