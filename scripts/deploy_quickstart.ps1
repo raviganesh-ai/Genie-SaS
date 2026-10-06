@@ -69,11 +69,13 @@
 
 .PARAMETER Location
     Azure region for every resource. Default: "eastus2" - confirm Azure AI
-    Foundry/model availability in your chosen region before accepting. Must
-    also be a region Azure Content Understanding supports (see
-    config/deployment/content_understanding_regions.yaml) - this script
-    fails closed before provisioning anything if it is not, since Content
-    Understanding is a mandatory backend startup dependency.
+    Foundry/model availability in your chosen region before accepting.
+    Interactive runs present this as a numbered selection list restricted to
+    regions Azure Content Understanding supports (see
+    config/deployment/content_understanding_regions.yaml), never free text;
+    this script fails closed before provisioning anything if a non-interactive
+    value is not on that list, since Content Understanding is a mandatory
+    backend startup dependency.
 
 .PARAMETER ResourcePrefix
     Short prefix applied to every resource name. Default: "genie".
@@ -396,18 +398,31 @@ Write-Stage "Stage 1/10: collect deployment parameters"
 $EnvironmentName = Read-RequiredValue -Prompt "Environment name" -Default $EnvironmentName
 
 $contentUnderstandingSupportedRegions = Get-ContentUnderstandingSupportedRegions -RepoRoot $repoRoot
-$locationDefault = $Location
-while ($true) {
-    $regionPrompt = "Azure region (Content Understanding-supported: $($contentUnderstandingSupportedRegions -join ', '))"
-    $Location = Read-RequiredValue -Prompt $regionPrompt -Default $locationDefault
-    if ($Location -in $contentUnderstandingSupportedRegions) {
-        break
+if ($NonInteractive) {
+    if ([string]::IsNullOrWhiteSpace($Location)) {
+        throw "A non-interactive value is required for 'Azure region'."
     }
-    if ($NonInteractive) {
-        break
+}
+else {
+    Write-Host "`nAzure region (must support Content Understanding, a mandatory backend startup dependency):" -ForegroundColor White
+    for ($i = 0; $i -lt $contentUnderstandingSupportedRegions.Count; $i++) {
+        Write-Host "  [$i] $($contentUnderstandingSupportedRegions[$i])"
     }
-    Write-Host "`nAzure region '$Location' does not support Content Understanding, a mandatory backend startup dependency. Choose one of: $($contentUnderstandingSupportedRegions -join ', ')." -ForegroundColor Yellow
-    $locationDefault = $null
+    $defaultIndex = [array]::IndexOf($contentUnderstandingSupportedRegions, $Location)
+    if ($defaultIndex -lt 0) { $defaultIndex = 0 }
+    while ($true) {
+        $regionIndexInput = Read-RequiredValue -Prompt "Pick a region by index" -Default "$defaultIndex"
+        $parsedRegionIndex = 0
+        if (
+            [int]::TryParse($regionIndexInput, [ref]$parsedRegionIndex) -and
+            $parsedRegionIndex -ge 0 -and
+            $parsedRegionIndex -lt $contentUnderstandingSupportedRegions.Count
+        ) {
+            $Location = $contentUnderstandingSupportedRegions[$parsedRegionIndex]
+            break
+        }
+        Write-Host "Enter a number between 0 and $($contentUnderstandingSupportedRegions.Count - 1)." -ForegroundColor Yellow
+    }
 }
 Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location
 $ResourcePrefix = Read-RequiredValue -Prompt "Resource name prefix" -Default $ResourcePrefix

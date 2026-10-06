@@ -204,26 +204,29 @@ def test_quickstart_validates_content_understanding_region_support() -> None:
     assert "function Get-ContentUnderstandingSupportedRegions" in script
     assert "function Assert-ContentUnderstandingSupportedRegion" in script
     assert "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location" in script
-    assert script.index("$Location = Read-RequiredValue") < script.index(
+    assert script.index("$contentUnderstandingSupportedRegions = Get-ContentUnderstandingSupportedRegions") < script.index(
         "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location"
     )
     assert "- eastus2" in registry
     assert "- centralus" not in registry
 
 
-def test_quickstart_reprompts_interactively_until_a_supported_region_is_chosen() -> None:
+def test_quickstart_presents_region_as_an_indexed_selection_list() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
 
-    loop_start = script.index("while ($true) {\n    $regionPrompt")
-    loop_end = script.index("Assert-ContentUnderstandingSupportedRegion", loop_start)
-    loop_body = script[loop_start:loop_end]
+    menu_start = script.index('Write-Host "`nAzure region (must support Content Understanding')
+    menu_end = script.index("Assert-ContentUnderstandingSupportedRegion", menu_start)
+    menu_body = script[menu_start:menu_end]
 
-    assert "if ($Location -in $contentUnderstandingSupportedRegions) {\n        break\n    }" in loop_body
-    assert "if ($NonInteractive) {\n        break\n    }" in loop_body
-    assert "$locationDefault = $null" in loop_body
-    assert loop_body.index("if ($Location -in $contentUnderstandingSupportedRegions)") < loop_body.index(
-        "if ($NonInteractive)"
-    )
+    # The operator picks a numbered index - never types a region name -
+    # matching the existing subscription-picker convention in Stage 0.
+    assert 'Write-Host "  [$i] $($contentUnderstandingSupportedRegions[$i])"' in menu_body
+    assert 'Read-RequiredValue -Prompt "Pick a region by index"' in menu_body
+    assert "[int]::TryParse($regionIndexInput, [ref]$parsedRegionIndex)" in menu_body
+    assert "$Location = $contentUnderstandingSupportedRegions[$parsedRegionIndex]" in menu_body
+    assert "if ($NonInteractive)" in script[
+        script.index("Stage 1/10: collect deployment parameters") : menu_start
+    ]
 
 
 def test_key_vault_is_private_and_policy_compliant() -> None:
