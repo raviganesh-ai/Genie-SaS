@@ -163,11 +163,8 @@ function Invoke-AzJson {
     return $output | ConvertFrom-Json -Depth 100
 }
 
-function Assert-ContentUnderstandingSupportedRegion {
-    param(
-        [Parameter(Mandatory = $true)][string]$RepoRoot,
-        [Parameter(Mandatory = $true)][string]$Location
-    )
+function Get-ContentUnderstandingSupportedRegions {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
 
     $registryPath = Join-Path $RepoRoot "config\deployment\content_understanding_regions.yaml"
     if (-not (Test-Path $registryPath)) {
@@ -181,10 +178,20 @@ function Assert-ContentUnderstandingSupportedRegion {
     if ($supportedRegions.Count -eq 0) {
         throw "Content Understanding region registry at '$registryPath' is empty."
     }
+    return $supportedRegions
+}
+
+function Assert-ContentUnderstandingSupportedRegion {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Location
+    )
+
+    $supportedRegions = Get-ContentUnderstandingSupportedRegions -RepoRoot $RepoRoot
     if ($Location -notin $supportedRegions) {
         throw (
             "Azure region '$Location' does not support Content Understanding, a mandatory " +
-            "backend startup dependency (see $registryPath). Choose one of: " +
+            "backend startup dependency (see $RepoRoot\config\deployment\content_understanding_regions.yaml). Choose one of: " +
             ($supportedRegions -join ', ')
         )
     }
@@ -387,7 +394,21 @@ Write-Host "Deploying into subscription: $SubscriptionId" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 Write-Stage "Stage 1/10: collect deployment parameters"
 $EnvironmentName = Read-RequiredValue -Prompt "Environment name" -Default $EnvironmentName
-$Location = Read-RequiredValue -Prompt "Azure region" -Default $Location
+
+$contentUnderstandingSupportedRegions = Get-ContentUnderstandingSupportedRegions -RepoRoot $repoRoot
+$locationDefault = $Location
+while ($true) {
+    $regionPrompt = "Azure region (Content Understanding-supported: $($contentUnderstandingSupportedRegions -join ', '))"
+    $Location = Read-RequiredValue -Prompt $regionPrompt -Default $locationDefault
+    if ($Location -in $contentUnderstandingSupportedRegions) {
+        break
+    }
+    if ($NonInteractive) {
+        break
+    }
+    Write-Host "`nAzure region '$Location' does not support Content Understanding, a mandatory backend startup dependency. Choose one of: $($contentUnderstandingSupportedRegions -join ', ')." -ForegroundColor Yellow
+    $locationDefault = $null
+}
 Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location
 $ResourcePrefix = Read-RequiredValue -Prompt "Resource name prefix" -Default $ResourcePrefix
 

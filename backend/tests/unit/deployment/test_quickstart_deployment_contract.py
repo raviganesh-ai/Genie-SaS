@@ -201,6 +201,7 @@ def test_quickstart_validates_content_understanding_region_support() -> None:
     registry_path = _REPO_ROOT / "config/deployment/content_understanding_regions.yaml"
     registry = registry_path.read_text(encoding="utf-8")
 
+    assert "function Get-ContentUnderstandingSupportedRegions" in script
     assert "function Assert-ContentUnderstandingSupportedRegion" in script
     assert "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location" in script
     assert script.index("$Location = Read-RequiredValue") < script.index(
@@ -208,6 +209,21 @@ def test_quickstart_validates_content_understanding_region_support() -> None:
     )
     assert "- eastus2" in registry
     assert "- centralus" not in registry
+
+
+def test_quickstart_reprompts_interactively_until_a_supported_region_is_chosen() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+
+    loop_start = script.index("while ($true) {\n    $regionPrompt")
+    loop_end = script.index("Assert-ContentUnderstandingSupportedRegion", loop_start)
+    loop_body = script[loop_start:loop_end]
+
+    assert "if ($Location -in $contentUnderstandingSupportedRegions) {\n        break\n    }" in loop_body
+    assert "if ($NonInteractive) {\n        break\n    }" in loop_body
+    assert "$locationDefault = $null" in loop_body
+    assert loop_body.index("if ($Location -in $contentUnderstandingSupportedRegions)") < loop_body.index(
+        "if ($NonInteractive)"
+    )
 
 
 def test_key_vault_is_private_and_policy_compliant() -> None:
