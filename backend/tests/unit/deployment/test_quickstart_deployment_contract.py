@@ -118,6 +118,18 @@ def test_bootstrap_gateway_defers_readiness_to_real_backend_rollout() -> None:
     assert script.count('"pending_backend_rollout"') == 2
 
 
+def test_backend_rollout_waits_for_readiness_without_a_default_deadline() -> None:
+    script = _read("scripts/deploy_backend.ps1")
+
+    assert "[int]$WaitTimeoutSeconds = 0" in script
+    assert "while ($true)" in script
+    assert "containerapp revision show" in script
+    assert '$revision.properties.provisioningState -eq "Failed"' in script
+    assert '$revision.properties.runningState -eq "Failed"' in script
+    assert '$revision.properties.healthState -eq "Healthy"' in script
+    assert "did not become ready within 600 seconds" not in script
+
+
 def test_foundry_lookup_only_treats_not_found_as_unprovisioned() -> None:
     script = _read("scripts/provision_foundry_agents.py")
 

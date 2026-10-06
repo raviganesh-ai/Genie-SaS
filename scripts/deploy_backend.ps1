@@ -52,7 +52,11 @@ param(
     [string]$RevisionSuffix,
 
     [string]$BackendContainerName = "genie-backend",
-    [int]$WaitTimeoutSeconds = 600
+
+    # Zero waits until Azure reports the revision and gateway ready. A positive
+    # value lets unattended operators impose their own deployment deadline.
+    [ValidateRange(0, 86400)]
+    [int]$WaitTimeoutSeconds = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -100,6 +104,12 @@ function Set-ContainerSecretEnvironmentVariable {
     $Container.env = @($Container.env) + @(
         [pscustomobject]@{ name = $Name; secretRef = $SecretRef }
     )
+}
+
+function Test-WaitExpired {
+    param([AllowNull()][Nullable[datetime]]$Deadline)
+
+    return $null -ne $Deadline -and (Get-Date) -ge $Deadline.Value
 }
 
 foreach ($requiredValue in @{
@@ -233,22 +243,58 @@ finally {
     }
 }
 
-$deadline = (Get-Date).AddSeconds($WaitTimeoutSeconds)
-do {
+$deadline = if ($WaitTimeoutSeconds -gt 0) {
+    [Nullable[datetime]](Get-Date).AddSeconds($WaitTimeoutSeconds)
+}
+else {
+    [Nullable[datetime]]$null
+}
+$lastRevisionStatus = $null
+while ($true) {
     Start-Sleep -Seconds 10
     $current = Invoke-AzJson containerapp show `
         --subscription $SubscriptionId `
         --resource-group $ResourceGroup `
         --name $ContainerAppName
-    $ready = (
-        $current.properties.latestRevisionName -eq $current.properties.latestReadyRevisionName -and
-        $current.properties.latestRevisionName.EndsWith("-$RevisionSuffix") -and
-        $current.properties.runningStatus -eq "Running"
-    )
-} while (-not $ready -and (Get-Date) -lt $deadline)
 
-if (-not $ready) {
-    throw "The backend revision did not become ready within $WaitTimeoutSeconds seconds."
+    $latestRevisionName = $current.properties.latestRevisionName
+    if (-not [string]::IsNullOrWhiteSpace($latestRevisionName) -and $latestRevisionName.EndsWith("-$RevisionSuffix")) {
+        $revision = Invoke-AzJson containerapp revision show `
+            --subscription $SubscriptionId `
+            --resource-group $ResourceGroup `
+            --name $ContainerAppName `
+            --revision $latestRevisionName
+        $revisionStatus = "provisioning=$($revision.properties.provisioningState), running=$($revision.properties.runningState), health=$($revision.properties.healthState)"
+        if ($revisionStatus -ne $lastRevisionStatus) {
+            Write-Host "Backend revision '$latestRevisionName': $revisionStatus"
+            $lastRevisionStatus = $revisionStatus
+        }
+        if (
+            $revision.properties.provisioningState -eq "Failed" -or
+            $revision.properties.runningState -eq "Failed"
+        ) {
+            throw "Backend revision '$latestRevisionName' failed: $revisionStatus."
+        }
+
+        $ready = (
+            $latestRevisionName -eq $current.properties.latestReadyRevisionName -and
+            $current.properties.runningStatus -eq "Running" -and
+            $revision.properties.provisioningState -eq "Provisioned" -and
+            $revision.properties.runningState -eq "Running" -and
+            $revision.properties.healthState -eq "Healthy"
+        )
+        if ($ready) {
+            break
+        }
+    }
+    elseif ($lastRevisionStatus -ne "waiting-for-target-revision") {
+        Write-Host "Waiting for Container Apps to create revision suffix '$RevisionSuffix'..."
+        $lastRevisionStatus = "waiting-for-target-revision"
+    }
+
+    if (Test-WaitExpired -Deadline $deadline) {
+        throw "The backend revision did not become ready within $WaitTimeoutSeconds seconds."
+    }
 }
 
 $deployedBackend = @($current.properties.template.containers | Where-Object {
@@ -275,9 +321,22 @@ if ($environment.properties.publicNetworkAccess -ne "Disabled") {
 }
 
 $baseUri = $GatewayUrl.TrimEnd("/")
-$health = Invoke-RestMethod -Method Get -Uri "$baseUri/health/ready" -TimeoutSec 30
-if ($health.status -ne "ready") {
-    throw "Backend readiness verification failed."
+while ($true) {
+    try {
+        $health = Invoke-RestMethod -Method Get -Uri "$baseUri/health/ready" -TimeoutSec 30
+        if ($health.status -eq "ready") {
+            break
+        }
+        Write-Host "Backend gateway route reported status '$($health.status)'; waiting for ready..."
+    }
+    catch {
+        Write-Host "Backend gateway route is not ready yet: $($_.Exception.Message)"
+    }
+
+    if (Test-WaitExpired -Deadline $deadline) {
+        throw "Backend gateway readiness did not succeed within $WaitTimeoutSeconds seconds."
+    }
+    Start-Sleep -Seconds 15
 }
 $sessionsResponse = Invoke-WebRequest -Method Get -Uri "$baseUri/sessions" -TimeoutSec 30
 if ($sessionsResponse.StatusCode -ne 200) {
