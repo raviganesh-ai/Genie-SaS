@@ -81,6 +81,18 @@ param containerRegistrySkuName string = 'Basic'
 // Deterministic, collision-resistant suffix derived from the subscription
 // and environment name - never a hardcoded/customer-specific value.
 var resourceToken = uniqueString(subscription().id, environmentName, location)
+// The Azure AI Foundry account/project's own name is derived from
+// foundryLocation specifically, NOT the shared resourceToken above: Azure
+// resource location is immutable once created, so if the Foundry account's
+// name only depended on the primary `location` (unchanged when only
+// foundryLocation is overridden), redeploying with a different
+// foundryLocation would compute the exact same account name as whatever
+// already exists from an earlier run in the primary region, and Bicep
+// would then try to change that existing resource's location in place -
+// which ARM rejects, surfacing as a confusing "already exists"/conflict
+// error instead of simply provisioning a distinctly-named new account in
+// the new region.
+var foundryResourceToken = uniqueString(subscription().id, environmentName, foundryLocation)
 var resourceGroupName = empty(resourceGroupNameOverride) ? '${resourcePrefix}-${environmentName}-rg' : resourceGroupNameOverride
 var tags = {
   application: 'genie'
@@ -102,6 +114,7 @@ module foundationalResources 'modules/foundational-resources.bicep' = {
     foundryLocation: foundryLocation
     resourcePrefix: resourcePrefix
     resourceToken: resourceToken
+    foundryResourceToken: foundryResourceToken
     virtualNetworkAddressPrefix: virtualNetworkAddressPrefix
     containerAppsInfrastructureSubnetPrefix: containerAppsInfrastructureSubnetPrefix
     privateEndpointSubnetPrefix: privateEndpointSubnetPrefix

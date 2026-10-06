@@ -7,6 +7,7 @@ param aiSearchLocation string = location
 param foundryLocation string = location
 param resourcePrefix string
 param resourceToken string
+param foundryResourceToken string
 param virtualNetworkAddressPrefix string
 param containerAppsInfrastructureSubnetPrefix string
 param privateEndpointSubnetPrefix string
@@ -143,8 +144,8 @@ module aiFoundry 'ai-foundry.bicep' = {
   name: 'genie-ai-foundry'
   params: {
     location: foundryLocation
-    accountName: '${resourcePrefix}-${resourceToken}-foundry'
-    projectName: '${resourcePrefix}-${resourceToken}-project'
+    accountName: '${resourcePrefix}-${foundryResourceToken}-foundry'
+    projectName: '${resourcePrefix}-${foundryResourceToken}-project'
     managedIdentityPrincipalId: managedIdentity.outputs.principalId
     deployerPrincipalId: deployerPrincipalId
     modelDeployments: foundryModelDeployments

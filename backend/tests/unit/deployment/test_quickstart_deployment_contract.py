@@ -263,7 +263,36 @@ def test_quickstart_decouples_the_foundry_region_from_the_primary_region() -> No
     assert "param foundryLocation string = location" in main_template
     assert "foundryLocation: foundryLocation" in main_template
     assert "param foundryLocation string = location" in foundational_template
-    assert "location: foundryLocation" in foundational_template.split("module aiFoundry ")[1].split("}")[0]
+    aifoundry_module_block = foundational_template.split("module aiFoundry ")[1].split(
+        "module containerAppsEnvironment "
+    )[0]
+    assert "location: foundryLocation" in aifoundry_module_block
+
+
+def test_foundry_account_name_is_keyed_to_its_own_region() -> None:
+    main_template = _read("infra/main.bicep")
+    foundational_template = _read("infra/modules/foundational-resources.bicep")
+
+    # Azure resource location is immutable once created. If the Foundry
+    # account's name were still derived from the shared resourceToken
+    # (keyed to the primary `location`, unchanged when only foundryLocation
+    # is overridden), redeploying with a different foundryLocation would
+    # compute the SAME account name as whatever already exists from an
+    # earlier run in the primary region, and Bicep would try to change
+    # that existing resource's location in place - which ARM rejects as a
+    # conflict, not simply provision a distinctly-named new account in the
+    # new region as expected. foundryResourceToken is keyed to
+    # foundryLocation specifically so the two scenarios never collide.
+    assert "var foundryResourceToken = uniqueString(subscription().id, environmentName, foundryLocation)" in main_template
+    assert "foundryResourceToken: foundryResourceToken" in main_template
+    assert "param foundryResourceToken string" in foundational_template
+    aifoundry_module_block = foundational_template.split("module aiFoundry ")[1].split(
+        "module containerAppsEnvironment "
+    )[0]
+    assert "accountName: '${resourcePrefix}-${foundryResourceToken}-foundry'" in aifoundry_module_block
+    assert "projectName: '${resourcePrefix}-${foundryResourceToken}-project'" in aifoundry_module_block
+    assert "resourceToken}-foundry" not in aifoundry_module_block
+    assert "resourceToken}-project" not in aifoundry_module_block
 
 
 def test_quickstart_presents_foundry_region_as_an_indexed_selection_list() -> None:
