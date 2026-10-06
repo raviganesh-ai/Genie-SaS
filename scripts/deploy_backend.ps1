@@ -112,6 +112,33 @@ function Test-WaitExpired {
     return $null -ne $Deadline -and (Get-Date) -ge $Deadline.Value
 }
 
+function Write-BackendFailureDiagnostics {
+    param(
+        [Parameter(Mandatory = $true)][string]$SubscriptionId,
+        [Parameter(Mandatory = $true)][string]$ResourceGroup,
+        [Parameter(Mandatory = $true)][string]$ContainerAppName,
+        [Parameter(Mandatory = $true)][string]$RevisionName
+    )
+
+    foreach ($logType in @("system", "console")) {
+        Write-Warning "Recent $logType logs for failed backend revision '$RevisionName':"
+        $logOutput = & az containerapp logs show `
+            --subscription $SubscriptionId `
+            --resource-group $ResourceGroup `
+            --name $ContainerAppName `
+            --revision $RevisionName `
+            --type $logType `
+            --tail 50 `
+            --only-show-errors 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $logOutput | ForEach-Object { Write-Host $_ }
+        }
+        else {
+            Write-Warning "Unable to retrieve $logType logs: $($logOutput -join [Environment]::NewLine)"
+        }
+    }
+}
+
 foreach ($requiredValue in @{
     BackendImage = $BackendImage
     AllowedOrigin = $AllowedOrigin
@@ -270,9 +297,14 @@ while ($true) {
             $lastRevisionStatus = $revisionStatus
         }
         if (
-            $revision.properties.provisioningState -eq "Failed" -or
-            $revision.properties.runningState -eq "Failed"
+            $revision.properties.provisioningState -match "Failed$" -or
+            $revision.properties.runningState -match "Failed$"
         ) {
+            Write-BackendFailureDiagnostics `
+                -SubscriptionId $SubscriptionId `
+                -ResourceGroup $ResourceGroup `
+                -ContainerAppName $ContainerAppName `
+                -RevisionName $latestRevisionName
             throw "Backend revision '$latestRevisionName' failed: $revisionStatus."
         }
 

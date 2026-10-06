@@ -124,8 +124,11 @@ def test_backend_rollout_waits_for_readiness_without_a_default_deadline() -> Non
     assert "[int]$WaitTimeoutSeconds = 0" in script
     assert "while ($true)" in script
     assert "containerapp revision show" in script
-    assert '$revision.properties.provisioningState -eq "Failed"' in script
-    assert '$revision.properties.runningState -eq "Failed"' in script
+    assert '$revision.properties.provisioningState -match "Failed$"' in script
+    assert '$revision.properties.runningState -match "Failed$"' in script
+    assert "function Write-BackendFailureDiagnostics" in script
+    assert "--revision $RevisionName" in script
+    assert '@("system", "console")' in script
     assert '$revision.properties.healthState -eq "Healthy"' in script
     assert "did not become ready within 600 seconds" not in script
 
