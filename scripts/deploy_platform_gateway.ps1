@@ -9,7 +9,9 @@
     disables environment public access, creates the Container Apps private
     endpoint, and then verifies both the private gateway route and direct-route
     denial. Use PrepareOnly to stop after APIM verification so the frontend can
-    be switched to the gateway before the private-backend cutover.
+    be switched to the gateway before the private-backend cutover. Use
+    BootstrapBackend only for a fresh quick-start placeholder; the subsequent
+    backend rollout becomes responsible for verifying the real route.
 #>
 [CmdletBinding()]
 param(
@@ -32,6 +34,12 @@ param(
     [string]$PublisherName,
 
     [switch]$PrepareOnly,
+
+    # Fresh infrastructure initially runs a public placeholder image with no
+    # Genie health endpoint. This mode completes the private APIM cutover but
+    # defers route readiness to deploy_backend.ps1, which verifies the real
+    # Genie image through APIM before the next stage may begin.
+    [switch]$BootstrapBackend,
 
     [int]$WaitTimeoutSeconds = 1800
 )
@@ -228,7 +236,9 @@ if ($environment.properties.publicNetworkAccess -eq "Disabled") {
         -PrivateEndpointName $privateEndpointName `
         -Deadline $deadline
 }
-Wait-ForGatewayReadiness -GatewayUrl $gatewayUrl -Deadline $deadline
+if (-not $BootstrapBackend) {
+    Wait-ForGatewayReadiness -GatewayUrl $gatewayUrl -Deadline $deadline
+}
 
 if ($PrepareOnly) {
     [pscustomobject]@{
@@ -236,7 +246,7 @@ if ($PrepareOnly) {
         gatewayUrl = $gatewayUrl
         containerAppsEnvironment = $environment.name
         publicNetworkAccess = $environment.properties.publicNetworkAccess
-        gatewayRoute = "verified"
+        gatewayRoute = if ($BootstrapBackend) { "pending_backend_rollout" } else { "verified" }
         cutover = "pending"
     } | ConvertTo-Json -Depth 10 -Compress
     return
@@ -307,7 +317,9 @@ if ($environment.properties.publicNetworkAccess -ne "Disabled") {
     throw "Container Apps environment public access is not disabled."
 }
 $deadline = (Get-Date).AddSeconds($WaitTimeoutSeconds)
-Wait-ForGatewayReadiness -GatewayUrl $gatewayUrl -Deadline $deadline
+if (-not $BootstrapBackend) {
+    Wait-ForGatewayReadiness -GatewayUrl $gatewayUrl -Deadline $deadline
+}
 
 $directBackendUrl = "https://$($app.properties.configuration.ingress.fqdn)"
 $directRouteExposed = $false
@@ -332,6 +344,6 @@ if ($directRouteExposed) {
     containerAppsEnvironment = $environment.name
     publicNetworkAccess = $environment.properties.publicNetworkAccess
     privateEndpoint = $privateEndpoint.name
-    gatewayRoute = "verified"
+    gatewayRoute = if ($BootstrapBackend) { "pending_backend_rollout" } else { "verified" }
     directBackendRoute = "denied"
 } | ConvertTo-Json -Depth 10 -Compress

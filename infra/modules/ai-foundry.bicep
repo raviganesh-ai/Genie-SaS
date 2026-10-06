@@ -21,6 +21,7 @@ param location string
 param accountName string
 param projectName string
 param managedIdentityPrincipalId string
+param deployerPrincipalId string
 param tags object
 
 @description('Model deployments created on the Foundry account as part of this same Bicep deployment (e.g. the default LLM referenced by config/agents/registry.yaml). Each entry must use a model/version/SKU actually available in `location` for this subscription - deploying an unavailable combination fails this template with the exact Azure error, never a silent fallback.')
@@ -98,7 +99,18 @@ resource cognitiveServicesUserRoleAssignment 'Microsoft.Authorization/roleAssign
   }
 }
 
+resource deployerCognitiveServicesUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployerPrincipalId)) {
+  name: guid(foundryAccount.id, deployerPrincipalId, cognitiveServicesUserRoleId)
+  scope: foundryAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      cognitiveServicesUserRoleId
+    )
+    principalId: deployerPrincipalId
+  }
+}
+
 output endpoint string = foundryAccount.properties.endpoint
 output accountName string = foundryAccount.name
 output projectName string = foundryProject.name
-

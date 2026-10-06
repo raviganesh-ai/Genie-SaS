@@ -10,6 +10,7 @@ param virtualNetworkAddressPrefix string
 param containerAppsInfrastructureSubnetPrefix string
 param privateEndpointSubnetPrefix string
 param apiManagementSubnetPrefix string
+param deployerPrincipalId string
 @description('Model deployments to create on the Foundry account - see ai-foundry.bicep.')
 param foundryModelDeployments array = []
 @description('Deploy the Azure Container Registry and a bootstrap backend Container App as part of this same template (recommended for a first deployment into an empty subscription). Set to false to reuse an existing registry/app instead.')
@@ -138,6 +139,7 @@ module aiFoundry 'ai-foundry.bicep' = {
     accountName: '${resourcePrefix}-${resourceToken}-foundry'
     projectName: '${resourcePrefix}-${resourceToken}-project'
     managedIdentityPrincipalId: managedIdentity.outputs.principalId
+    deployerPrincipalId: deployerPrincipalId
     modelDeployments: foundryModelDeployments
     tags: tags
   }
@@ -230,6 +232,5 @@ output containerRegistryName string = deployContainerRegistryAndBackendApp ? con
 output containerRegistryLoginServer string = deployContainerRegistryAndBackendApp ? containerRegistry!.outputs.loginServer : ''
 output backendContainerAppName string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.name : ''
 output backendContainerAppFqdn string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.fqdn : ''
-
 
 

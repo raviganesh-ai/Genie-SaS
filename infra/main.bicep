@@ -46,6 +46,9 @@ param apiManagementSubnetPrefix string = '10.20.4.0/24'
 @maxLength(8)
 param resourcePrefix string = 'genie'
 
+@description('Object id of the operator running quick-start. Granted Cognitive Services User on the new Foundry account so the out-of-band agent provisioning stage can create and verify Prompt Agents.')
+param deployerPrincipalId string = ''
+
 @description('Model deployments to create on the Azure AI Foundry account as part of this deployment. Each item needs: name (the deployment name agents reference, e.g. config/agents/registry.yaml model_deployment_ref), model, version, and optionally format/skuName/skuCapacity. Leave empty to skip and deploy models manually afterward.')
 param foundryModelDeployments array = []
 
@@ -87,6 +90,7 @@ module foundationalResources 'modules/foundational-resources.bicep' = {
     containerAppsInfrastructureSubnetPrefix: containerAppsInfrastructureSubnetPrefix
     privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
     apiManagementSubnetPrefix: apiManagementSubnetPrefix
+    deployerPrincipalId: deployerPrincipalId
     foundryModelDeployments: foundryModelDeployments
     deployContainerRegistryAndBackendApp: deployContainerRegistryAndBackendApp
     containerRegistrySkuName: containerRegistrySkuName
@@ -122,4 +126,3 @@ output containerRegistryName string = foundationalResources.outputs.containerReg
 output containerRegistryLoginServer string = foundationalResources.outputs.containerRegistryLoginServer
 output backendContainerAppName string = foundationalResources.outputs.backendContainerAppName
 output backendContainerAppFqdn string = foundationalResources.outputs.backendContainerAppFqdn
-

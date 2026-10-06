@@ -129,7 +129,7 @@ Genie agents are **real Foundry agent resources**, provisioned once per environm
 ```powershell
 # Requires the caller to hold "Cognitive Services User" (or equivalent) at the
 # Foundry PROJECT scope (not just the account scope) for data-plane writes.
-python scripts/provision_foundry_agents.py --endpoint <foundry-endpoint> --project <foundry-project-name>
+python scripts/provision_foundry_agents.py --endpoint <foundry-project-endpoint>
 ```
 
 Uses the `azure-ai-projects` SDK (`AIProjectClient(endpoint=..., credential=DefaultAzureCredential())`) to create or update one Foundry agent per enabled entry in `config/agents/registry.yaml`.

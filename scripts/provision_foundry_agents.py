@@ -2,8 +2,7 @@
 
 Usage (from the repo root, backend virtual environment activated)::
 
-    python scripts/provision_foundry_agents.py --endpoint <account-endpoint> \\
-        --project <project-name>
+    python scripts/provision_foundry_agents.py --endpoint <project-endpoint>
 
 This is the IaC/CLI-equivalent "provisioning" step referenced by
 ``config/agents/registry.yaml``'s own comments and by
@@ -104,6 +103,7 @@ def main() -> None:
     try:
         from azure.ai.projects import AIProjectClient
         from azure.ai.projects.models import FunctionTool, PromptAgentDefinition
+        from azure.core.exceptions import ResourceNotFoundError
         from azure.identity import DefaultAzureCredential
     except ImportError as exc:
         print(f"ERROR: azure-ai-projects / azure-identity not installed: {exc}", file=sys.stderr)
@@ -157,7 +157,7 @@ def main() -> None:
         try:
             client.agents.get(agent.foundry_agent_id)
             already_provisioned = True
-        except Exception:  # noqa: BLE001 - any lookup failure means "not yet provisioned"
+        except ResourceNotFoundError:
             already_provisioned = False
 
         force_update = already_provisioned and args.force and args.agents is not None
@@ -203,4 +203,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
