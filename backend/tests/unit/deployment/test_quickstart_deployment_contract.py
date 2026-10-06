@@ -198,6 +198,25 @@ def test_foundry_infrastructure_grants_the_quickstart_operator_data_plane_access
     assert "if (!empty(deployerPrincipalId))" in foundry_module
 
 
+def test_foundry_project_waits_for_model_deployments_to_avoid_account_lock_conflict() -> None:
+    foundry_module = _read("infra/modules/ai-foundry.bicep")
+
+    # foundryProject and modelDeployment[] both only declare `parent:
+    # foundryAccount`, so Bicep has no implicit ordering between them and
+    # may issue both writes concurrently. Cognitive Services' control
+    # plane treats any nested write (project OR deployment) as acquiring
+    # an account-level lock, so a concurrent write fails with
+    # "RequestConflict: Another operation is in progress on the resource
+    # .../accounts/<name>" (confirmed live, 2026-10-06). An explicit
+    # dependsOn on the (possibly empty) modelDeployment loop forces every
+    # deployment to finish first.
+    project_block = foundry_module.split("resource foundryProject ")[1].split(
+        "resource cognitiveServicesUserRoleAssignment "
+    )[0]
+    assert "dependsOn: [" in project_block
+    assert "modelDeployment" in project_block.split("dependsOn: [")[1].split("]")[0]
+
+
 def test_foundry_endpoint_uses_the_services_ai_azure_com_host() -> None:
     foundry_module = _read("infra/modules/ai-foundry.bicep")
     foundational_template = _read("infra/modules/foundational-resources.bicep")

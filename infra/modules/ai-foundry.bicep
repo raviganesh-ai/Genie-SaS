@@ -84,6 +84,19 @@ resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-0
     type: 'SystemAssigned'
   }
   properties: {}
+  // Both this resource and modelDeployment[] only declare `parent:
+  // foundryAccount` above, so Bicep has no implicit ordering between
+  // them - it may issue both writes concurrently. Cognitive Services'
+  // control plane treats any nested write (project OR deployment) as
+  // acquiring an account-level lock, so a concurrent write collides with
+  // "RequestConflict: Another operation is in progress on the resource
+  // .../accounts/<name>" (confirmed live, 2026-10-06). This explicit
+  // dependsOn forces every model deployment to finish first - harmless
+  // when modelDeployments is empty, since the loop then produces zero
+  // resources and this dependency list resolves to empty too.
+  dependsOn: [
+    modelDeployment
+  ]
 }
 
 resource cognitiveServicesUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
