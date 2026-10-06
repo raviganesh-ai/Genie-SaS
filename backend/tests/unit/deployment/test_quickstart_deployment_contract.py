@@ -115,7 +115,10 @@ def test_quickstart_defaults_every_agent_to_gpt_5_mini() -> None:
 def test_quickstart_resolves_the_latest_regional_model_version() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
 
-    assert "Invoke-AzJson cognitiveservices model list --location $Location" in script
+    # Models are deployed on the Foundry account, so availability/version
+    # resolution must query the Foundry region specifically - not the
+    # primary -Location, which may be a region Foundry isn't even in.
+    assert "Invoke-AzJson cognitiveservices model list --location $FoundryLocation" in script
     assert "function Resolve-LatestAzureModelDeployment" in script
     assert "$_.model.name -eq $ModelName" in script
     assert "Get-ModelVersionSortKey -Version $_.model.version" in script
@@ -227,27 +230,55 @@ def test_quickstart_validates_content_understanding_region_support() -> None:
 
     assert "function Get-ContentUnderstandingSupportedRegions" in script
     assert "function Assert-ContentUnderstandingSupportedRegion" in script
-    assert "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location" in script
+    assert "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $FoundryLocation" in script
     assert script.index("$contentUnderstandingSupportedRegions = Get-ContentUnderstandingSupportedRegions") < script.index(
-        "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location"
+        "Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $FoundryLocation"
     )
     assert "- eastus2" in registry
     assert "- centralus" not in registry
 
 
-def test_quickstart_presents_region_as_an_indexed_selection_list() -> None:
+def test_quickstart_decouples_the_foundry_region_from_the_primary_region() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+    main_template = _read("infra/main.bicep")
+    foundational_template = _read("infra/modules/foundational-resources.bicep")
+
+    # The primary -Location prompt is plain free text (any Azure region is
+    # fine for every resource except Foundry) - it must NOT be restricted
+    # to the Content Understanding list, so operators whose org standardizes
+    # on an unsupported region (e.g. centralus) aren't forced to move
+    # everything else out of it too.
+    assert '$Location = Read-RequiredValue -Prompt "Azure region" -Default $Location' in script
+    assert "[string]$FoundryLocation" in script
+
+    # Foundry gets its own, separately validated, CU-restricted selection.
+    assert 'Write-Host "`nAzure AI Foundry region (model deployments, agents, and Content Understanding' in script
+    assert "$FoundryLocation = $contentUnderstandingSupportedRegions[$parsedRegionIndex]" in script
+    assert "Invoke-AzJson cognitiveservices model list --location $FoundryLocation" in script
+    assert "-Region $FoundryLocation" in script
+    assert "foundryLocation          = @{ value = $FoundryLocation }" in script
+
+    # Bicep: every resource keeps using `location` except Foundry, which
+    # uses the independently overridable `foundryLocation`.
+    assert "param foundryLocation string = location" in main_template
+    assert "foundryLocation: foundryLocation" in main_template
+    assert "param foundryLocation string = location" in foundational_template
+    assert "location: foundryLocation" in foundational_template.split("module aiFoundry ")[1].split("}")[0]
+
+
+def test_quickstart_presents_foundry_region_as_an_indexed_selection_list() -> None:
     script = _read("scripts/deploy_quickstart.ps1")
 
-    menu_start = script.index('Write-Host "`nAzure region (must support Content Understanding')
+    menu_start = script.index('Write-Host "`nAzure AI Foundry region (model deployments, agents, and Content Understanding')
     menu_end = script.index("Assert-ContentUnderstandingSupportedRegion", menu_start)
     menu_body = script[menu_start:menu_end]
 
     # The operator picks a numbered index - never types a region name -
     # matching the existing subscription-picker convention in Stage 0.
     assert 'Write-Host "  [$i] $($contentUnderstandingSupportedRegions[$i])"' in menu_body
-    assert 'Read-RequiredValue -Prompt "Pick a region by index"' in menu_body
+    assert 'Read-RequiredValue -Prompt "Pick a Foundry region by index"' in menu_body
     assert "[int]::TryParse($regionIndexInput, [ref]$parsedRegionIndex)" in menu_body
-    assert "$Location = $contentUnderstandingSupportedRegions[$parsedRegionIndex]" in menu_body
+    assert "$FoundryLocation = $contentUnderstandingSupportedRegions[$parsedRegionIndex]" in menu_body
     assert "if ($NonInteractive)" in script[
         script.index("Stage 1/10: collect deployment parameters") : menu_start
     ]

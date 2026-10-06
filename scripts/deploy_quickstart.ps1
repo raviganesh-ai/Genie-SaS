@@ -68,14 +68,25 @@
     Short, unique name for this environment (e.g. "dev"). Default: "dev".
 
 .PARAMETER Location
-    Azure region for every resource. Default: "eastus2" - confirm Azure AI
-    Foundry/model availability in your chosen region before accepting.
-    Interactive runs present this as a numbered selection list restricted to
-    regions Azure Content Understanding supports (see
+    Azure region for every resource EXCEPT the Azure AI Foundry account.
+    Default: "eastus2". Does not need to support Azure Content
+    Understanding - see FoundryLocation for the one region selection that
+    does.
+
+.PARAMETER FoundryLocation
+    Azure region for the Azure AI Foundry account specifically (model
+    deployments, agent execution, and Azure Content Understanding, a
+    mandatory backend startup dependency - see
+    backend/app/services/document_understanding_service.py). Defaults to
+    Location when omitted/blank. Interactive runs present this as a
+    numbered selection list restricted to regions Azure Content
+    Understanding supports (see
     config/regions/content_understanding_regions.yaml), never free text;
-    this script fails closed before provisioning anything if a non-interactive
-    value is not on that list, since Content Understanding is a mandatory
-    backend startup dependency.
+    this script fails closed before provisioning anything if a
+    non-interactive value is not on that list. Set this independently of
+    Location when your primary region (e.g. "centralus") does not support
+    Content Understanding - every other resource still deploys into
+    Location, unchanged, in the same resource group.
 
 .PARAMETER ResourcePrefix
     Short prefix applied to every resource name. Default: "genie".
@@ -96,13 +107,14 @@
     (fully interactive - prompts for everything required)
 
 .EXAMPLE
-    ./scripts/deploy_quickstart.ps1 -SubscriptionId <your-subscription-id> -EnvironmentName dev -Location eastus2
+    ./scripts/deploy_quickstart.ps1 -SubscriptionId <your-subscription-id> -EnvironmentName dev -Location centralus -FoundryLocation southcentralus
 #>
 [CmdletBinding()]
 param(
     [string]$SubscriptionId,
     [string]$EnvironmentName = "dev",
     [string]$Location = "eastus2",
+    [string]$FoundryLocation,
     [string]$ResourcePrefix = "genie",
     [string]$ResourceGroupName,
     [string]$GitHubMcpEndpoint = "https://api.githubcopilot.com/mcp/",
@@ -225,7 +237,8 @@ function Resolve-LatestAzureModelDeployment {
     param(
         [Parameter(Mandatory = $true)][string]$DeploymentName,
         [Parameter(Mandatory = $true)][string]$ModelName,
-        [Parameter(Mandatory = $true)][object[]]$Catalog
+        [Parameter(Mandatory = $true)][object[]]$Catalog,
+        [Parameter(Mandatory = $true)][string]$Region
     )
 
     $availableModels = @(
@@ -236,7 +249,7 @@ function Resolve-LatestAzureModelDeployment {
             }
     )
     if ($availableModels.Count -eq 0) {
-        throw "Azure model '$ModelName' is not available in region '$Location' for the selected subscription."
+        throw "Azure model '$ModelName' is not available in region '$Region' for the selected subscription."
     }
 
     $selectedModel = $availableModels |
@@ -246,7 +259,7 @@ function Resolve-LatestAzureModelDeployment {
         } |
         Select-Object -First 1
 
-    Write-Host "Resolved Azure model '$ModelName' to latest version '$($selectedModel.model.version)' in '$Location'." -ForegroundColor Green
+    Write-Host "Resolved Azure model '$ModelName' to latest version '$($selectedModel.model.version)' in '$Region'." -ForegroundColor Green
     return @{
         name = $DeploymentName
         model = $ModelName
@@ -396,35 +409,45 @@ Write-Host "Deploying into subscription: $SubscriptionId" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 Write-Stage "Stage 1/10: collect deployment parameters"
 $EnvironmentName = Read-RequiredValue -Prompt "Environment name" -Default $EnvironmentName
+$Location = Read-RequiredValue -Prompt "Azure region" -Default $Location
 
 $contentUnderstandingSupportedRegions = Get-ContentUnderstandingSupportedRegions -RepoRoot $repoRoot
-if ($NonInteractive) {
-    if ([string]::IsNullOrWhiteSpace($Location)) {
-        throw "A non-interactive value is required for 'Azure region'."
-    }
+$foundryLocationDefault = if (-not [string]::IsNullOrWhiteSpace($FoundryLocation)) {
+    $FoundryLocation
+}
+elseif ($Location -in $contentUnderstandingSupportedRegions) {
+    $Location
 }
 else {
-    Write-Host "`nAzure region (must support Content Understanding, a mandatory backend startup dependency):" -ForegroundColor White
+    "eastus2"
+}
+if ($NonInteractive) {
+    $FoundryLocation = if ([string]::IsNullOrWhiteSpace($FoundryLocation)) { $foundryLocationDefault } else { $FoundryLocation }
+}
+else {
+    Write-Host "`nAzure AI Foundry region (model deployments, agents, and Content Understanding -" -ForegroundColor White
+    Write-Host "a mandatory backend startup dependency - require one of these regions; every" -ForegroundColor White
+    Write-Host "other resource still deploys into '$Location'):" -ForegroundColor White
     for ($i = 0; $i -lt $contentUnderstandingSupportedRegions.Count; $i++) {
         Write-Host "  [$i] $($contentUnderstandingSupportedRegions[$i])"
     }
-    $defaultIndex = [array]::IndexOf($contentUnderstandingSupportedRegions, $Location)
+    $defaultIndex = [array]::IndexOf($contentUnderstandingSupportedRegions, $foundryLocationDefault)
     if ($defaultIndex -lt 0) { $defaultIndex = 0 }
     while ($true) {
-        $regionIndexInput = Read-RequiredValue -Prompt "Pick a region by index" -Default "$defaultIndex"
+        $regionIndexInput = Read-RequiredValue -Prompt "Pick a Foundry region by index" -Default "$defaultIndex"
         $parsedRegionIndex = 0
         if (
             [int]::TryParse($regionIndexInput, [ref]$parsedRegionIndex) -and
             $parsedRegionIndex -ge 0 -and
             $parsedRegionIndex -lt $contentUnderstandingSupportedRegions.Count
         ) {
-            $Location = $contentUnderstandingSupportedRegions[$parsedRegionIndex]
+            $FoundryLocation = $contentUnderstandingSupportedRegions[$parsedRegionIndex]
             break
         }
         Write-Host "Enter a number between 0 and $($contentUnderstandingSupportedRegions.Count - 1)." -ForegroundColor Yellow
     }
 }
-Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $Location
+Assert-ContentUnderstandingSupportedRegion -RepoRoot $repoRoot -Location $FoundryLocation
 $ResourcePrefix = Read-RequiredValue -Prompt "Resource name prefix" -Default $ResourcePrefix
 
 $githubMcpEndpoint = Read-RequiredValue -Prompt "GitHub MCP endpoint" -Default $GitHubMcpEndpoint
@@ -437,13 +460,14 @@ $publisherName = Read-RequiredValue -Prompt "APIM publisher display name" -Defau
 $defaultLlmDeploymentName = Read-RequiredValue -Prompt "Deployment name (agents will reference this exact name)" -Default $DefaultLlmDeploymentName
 $defaultLlmModel = Read-RequiredValue -Prompt "Model name" -Default $DefaultLlmModel
 $azureModelCatalog = @(
-    Invoke-AzJson cognitiveservices model list --location $Location
+    Invoke-AzJson cognitiveservices model list --location $FoundryLocation
 )
 $modelDeployments = @(
     Resolve-LatestAzureModelDeployment `
         -DeploymentName $defaultLlmDeploymentName `
         -ModelName $defaultLlmModel `
-        -Catalog $azureModelCatalog
+        -Catalog $azureModelCatalog `
+        -Region $FoundryLocation
 )
 
 # ---------------------------------------------------------------------------
@@ -576,7 +600,8 @@ foreach ($requiredDeploymentName in $requiredAgentModels) {
     $modelDeployments += Resolve-LatestAzureModelDeployment `
         -DeploymentName $requiredDeploymentName `
         -ModelName $requiredModelName `
-        -Catalog $azureModelCatalog
+        -Catalog $azureModelCatalog `
+        -Region $FoundryLocation
 }
 $env:GENIE_DEPLOY_SUBSCRIPTION_ID = $SubscriptionId
 Push-Location $repoRoot
@@ -606,6 +631,7 @@ $armParameters = @{
     parameters     = @{
         environmentName         = @{ value = $EnvironmentName }
         location                = @{ value = $Location }
+        foundryLocation          = @{ value = $FoundryLocation }
         resourceGroupLocation    = @{ value = $resourceGroupLocation }
         resourcePrefix           = @{ value = $ResourcePrefix }
         resourceGroupNameOverride = @{ value = $ResourceGroupName }

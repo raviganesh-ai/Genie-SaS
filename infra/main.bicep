@@ -32,6 +32,9 @@ param resourceGroupLocation string = location
 @description('Azure region for Azure AI Search. Defaults to `location`; override this independently if AI Search lacks capacity in the primary region.')
 param aiSearchLocation string = location
 
+@description('Azure region for the Azure AI Foundry account (model deployments, agent execution, and Azure Content Understanding). Defaults to `location`; override this independently when the primary region does not support Content Understanding (see config/regions/content_understanding_regions.yaml) - every other resource still deploys into `location`.')
+param foundryLocation string = location
+
 @description('Address space reserved for the Genie Container Apps environment and private endpoints.')
 param virtualNetworkAddressPrefix string = '10.20.0.0/16'
 
@@ -96,6 +99,7 @@ module foundationalResources 'modules/foundational-resources.bicep' = {
   params: {
     location: location
     aiSearchLocation: aiSearchLocation
+    foundryLocation: foundryLocation
     resourcePrefix: resourcePrefix
     resourceToken: resourceToken
     virtualNetworkAddressPrefix: virtualNetworkAddressPrefix

@@ -4,6 +4,7 @@
 // by infra/main.bicep.
 param location string
 param aiSearchLocation string = location
+param foundryLocation string = location
 param resourcePrefix string
 param resourceToken string
 param virtualNetworkAddressPrefix string
@@ -141,7 +142,7 @@ module aiSearch 'ai-search.bicep' = {
 module aiFoundry 'ai-foundry.bicep' = {
   name: 'genie-ai-foundry'
   params: {
-    location: location
+    location: foundryLocation
     accountName: '${resourcePrefix}-${resourceToken}-foundry'
     projectName: '${resourcePrefix}-${resourceToken}-project'
     managedIdentityPrincipalId: managedIdentity.outputs.principalId
