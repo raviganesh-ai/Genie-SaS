@@ -58,6 +58,12 @@ param foundryModelDeployments array = []
 @description('Deploy an Azure Container Registry and a bootstrap backend Container App as part of this same template - recommended so a brand-new, empty subscription ends up with a real (if not-yet-configured) Container App resource that scripts/deploy_backend.ps1 can then roll the real image onto. Set to false if you already have your own registry/app.')
 param deployContainerRegistryAndBackendApp bool = true
 
+@description('Create or update the bootstrap backend Container App. Set to false with existingBackendContainerAppName when quick-start detects an already provisioned, healthy Genie backend that must be preserved.')
+param provisionBackendContainerApp bool = true
+
+@description('Existing healthy Genie backend Container App name to preserve when provisionBackendContainerApp is false.')
+param existingBackendContainerAppName string = ''
+
 @description('Azure Container Registry SKU.')
 @allowed([
   'Basic'
@@ -96,6 +102,8 @@ module foundationalResources 'modules/foundational-resources.bicep' = {
     deployerPrincipalId: deployerPrincipalId
     foundryModelDeployments: foundryModelDeployments
     deployContainerRegistryAndBackendApp: deployContainerRegistryAndBackendApp
+    provisionBackendContainerApp: provisionBackendContainerApp
+    existingBackendContainerAppName: existingBackendContainerAppName
     containerRegistrySkuName: containerRegistrySkuName
     tags: tags
   }

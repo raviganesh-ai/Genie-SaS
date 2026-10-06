@@ -25,7 +25,7 @@ def test_quickstart_orders_verified_parent_stages_before_dependents() -> None:
 
     positions = [script.index(stage) for stage in stages]
     assert positions == sorted(positions)
-    assert "-BootstrapBackend" in script
+    assert "BootstrapBackend = -not $reuseProvisionedBackend" in script
     assert 'throw "Foundry agent provisioning failed."' in script
     assert 'throw "Foundry agent live synchronization failed."' in script
     assert "az ad signed-in-user show --query id" in script
@@ -128,6 +128,27 @@ def test_backend_rollout_waits_for_readiness_without_a_default_deadline() -> Non
     assert '$revision.properties.runningState -eq "Failed"' in script
     assert '$revision.properties.healthState -eq "Healthy"' in script
     assert "did not become ready within 600 seconds" not in script
+
+
+def test_quickstart_preserves_an_existing_healthy_genie_backend() -> None:
+    script = _read("scripts/deploy_quickstart.ps1")
+    main_template = _read("infra/main.bicep")
+    foundational_template = _read("infra/modules/foundational-resources.bicep")
+
+    assert "function Find-ProvisionedGenieBackend" in script
+    assert '$backendContainer.image -match "/genie-backend:[^/]+$"' in script
+    assert '$_.name -eq "GENIE_SERVICE_NAME" -and $_.value -eq "genie-backend"' in script
+    assert "A healthy Genie backend is already provisioned. Provision it again? (y/N)" in script
+    assert "No healthy Genie backend was found. Provision it now? (Y/n)" in script
+    assert "Backend provisioning was declined, but no healthy Genie backend exists to reuse." in script
+    assert "provisionBackendContainerApp = @{ value = -not $reuseProvisionedBackend }" in script
+    assert "Stage 5/10: reusing the provisioned backend" in script
+    assert "Stage 8/10: preserving the provisioned backend" in script
+    assert "BootstrapBackend = -not $reuseProvisionedBackend" in script
+    assert "param provisionBackendContainerApp bool = true" in main_template
+    assert "param existingBackendContainerAppName string = ''" in main_template
+    assert "if (deployContainerRegistryAndBackendApp && provisionBackendContainerApp)" in foundational_template
+    assert "existingBackendContainerApp" in foundational_template
 
 
 def test_foundry_lookup_only_treats_not_found_as_unprovisioned() -> None:

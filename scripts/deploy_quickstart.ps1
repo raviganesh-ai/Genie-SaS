@@ -215,6 +215,73 @@ function Resolve-LatestAzureModelDeployment {
     }
 }
 
+function Find-ProvisionedGenieBackend {
+    param(
+        [Parameter(Mandatory = $true)][string]$SubscriptionId,
+        [Parameter(Mandatory = $true)][string]$ResourceGroup
+    )
+
+    $resourceGroupExists = & az group exists `
+        --subscription $SubscriptionId `
+        --name $ResourceGroup `
+        --only-show-errors `
+        -o tsv
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to check whether resource group '$ResourceGroup' exists."
+    }
+    if ($resourceGroupExists -ne "true") {
+        return $null
+    }
+
+    $candidates = @()
+    $apps = @(Invoke-AzJson containerapp list --subscription $SubscriptionId --resource-group $ResourceGroup)
+    foreach ($app in $apps) {
+        $backendContainers = @(
+            $app.properties.template.containers |
+                Where-Object { $_.name -eq "genie-backend" }
+        )
+        if ($backendContainers.Count -ne 1) {
+            continue
+        }
+        $backendContainer = $backendContainers[0]
+        $serviceName = @(
+            $backendContainer.env |
+                Where-Object { $_.name -eq "GENIE_SERVICE_NAME" -and $_.value -eq "genie-backend" }
+        )
+        $isGenieImage = $backendContainer.image -match "/genie-backend:[^/]+$"
+        $isReadyRevision = (
+            -not [string]::IsNullOrWhiteSpace($app.properties.latestRevisionName) -and
+            $app.properties.latestRevisionName -eq $app.properties.latestReadyRevisionName -and
+            $app.properties.runningStatus -eq "Running"
+        )
+        if (-not $isGenieImage -or $serviceName.Count -ne 1 -or -not $isReadyRevision) {
+            continue
+        }
+
+        $revision = Invoke-AzJson containerapp revision show `
+            --subscription $SubscriptionId `
+            --resource-group $ResourceGroup `
+            --name $app.name `
+            --revision $app.properties.latestRevisionName
+        if (
+            $revision.properties.provisioningState -eq "Provisioned" -and
+            $revision.properties.runningState -eq "Running" -and
+            $revision.properties.healthState -eq "Healthy"
+        ) {
+            $candidates += [pscustomobject]@{
+                name = $app.name
+                image = $backendContainer.image
+                revision = $app.properties.latestRevisionName
+            }
+        }
+    }
+
+    if ($candidates.Count -gt 1) {
+        throw "Found multiple healthy Genie backends in resource group '$ResourceGroup'; cannot safely choose one to preserve."
+    }
+    return $candidates | Select-Object -First 1
+}
+
 Write-Host @"
 Genie - one-command deploy into YOUR Azure subscription
 =========================================================
@@ -292,14 +359,6 @@ $EnvironmentName = Read-RequiredValue -Prompt "Environment name" -Default $Envir
 $Location = Read-RequiredValue -Prompt "Azure region" -Default $Location
 $ResourcePrefix = Read-RequiredValue -Prompt "Resource name prefix" -Default $ResourcePrefix
 
-Write-Host "`nGenie's backend connects to GitHub repositories through a GitHub MCP" -ForegroundColor White
-Write-Host "server using a token YOU provide - never a token belonging to anyone else." -ForegroundColor White
-Write-Host "Create a fine-grained Personal Access Token at https://github.com/settings/tokens" -ForegroundColor White
-Write-Host "(read-only repo scopes are enough unless you plan to test branch/PR creation)." -ForegroundColor White
-$githubMcpToken = [Environment]::GetEnvironmentVariable("GENIE_GITHUB_MCP_TOKEN")
-if ([string]::IsNullOrWhiteSpace($githubMcpToken)) {
-    $githubMcpToken = Read-SecretValue -Prompt "GitHub Personal Access Token"
-}
 $githubMcpEndpoint = Read-RequiredValue -Prompt "GitHub MCP endpoint" -Default $GitHubMcpEndpoint
 
 Write-Host "`nAzure API Management requires a publisher contact - this is shown on" -ForegroundColor White
@@ -337,6 +396,46 @@ Write-Stage "Stage 2/10: check for a previous deployment to remove first"
     -Yes:$RemovePreviousDeployment
 if ($LASTEXITCODE -ne 0) {
     throw "Pre-deployment cleanup check failed."
+}
+
+$expectedResourceGroup = if ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {
+    "$ResourcePrefix-$EnvironmentName-rg"
+}
+else {
+    $ResourceGroupName
+}
+$provisionedBackend = Find-ProvisionedGenieBackend `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroup $expectedResourceGroup
+$reuseProvisionedBackend = $false
+if ($null -ne $provisionedBackend) {
+    if ($NonInteractive) {
+        $reuseProvisionedBackend = $true
+    }
+    else {
+        $provisionAgain = Read-Host "A healthy Genie backend is already provisioned. Provision it again? (y/N)"
+        $reuseProvisionedBackend = $provisionAgain -notmatch '^(y|yes)$'
+    }
+}
+elseif (-not $NonInteractive) {
+    $provisionBackend = Read-Host "No healthy Genie backend was found. Provision it now? (Y/n)"
+    if ($provisionBackend -match '^(n|no)$') {
+        throw "Backend provisioning was declined, but no healthy Genie backend exists to reuse."
+    }
+}
+
+if ($reuseProvisionedBackend) {
+    Write-Host "Reusing healthy Genie backend '$($provisionedBackend.name)' revision '$($provisionedBackend.revision)'." -ForegroundColor Green
+}
+else {
+    Write-Host "`nGenie's backend connects to GitHub repositories through a GitHub MCP" -ForegroundColor White
+    Write-Host "server using a token YOU provide - never a token belonging to anyone else." -ForegroundColor White
+    Write-Host "Create a fine-grained Personal Access Token at https://github.com/settings/tokens" -ForegroundColor White
+    Write-Host "(read-only repo scopes are enough unless you plan to test branch/PR creation)." -ForegroundColor White
+    $githubMcpToken = [Environment]::GetEnvironmentVariable("GENIE_GITHUB_MCP_TOKEN")
+    if ([string]::IsNullOrWhiteSpace($githubMcpToken)) {
+        $githubMcpToken = Read-SecretValue -Prompt "GitHub Personal Access Token"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -415,6 +514,8 @@ $armParameters = @{
         resourceGroupNameOverride = @{ value = $ResourceGroupName }
         deployerPrincipalId       = @{ value = $deployerPrincipalId }
         foundryModelDeployments  = @{ value = $modelDeployments }
+        provisionBackendContainerApp = @{ value = -not $reuseProvisionedBackend }
+        existingBackendContainerAppName = @{ value = $(if ($reuseProvisionedBackend) { $provisionedBackend.name } else { "" }) }
     }
 }
 try {
@@ -457,33 +558,41 @@ if ([string]::IsNullOrWhiteSpace($containerAppName) -or [string]::IsNullOrWhiteS
 # ---------------------------------------------------------------------------
 # Stage 4: build and push the real backend image.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 5/10: building and pushing the backend image"
-$imageTag = (git -C $repoRoot rev-parse --short HEAD 2>$null)
-if ([string]::IsNullOrWhiteSpace($imageTag)) { $imageTag = Get-Date -Format "yyyyMMddHHmmss" }
-$backendImage = "$acrLoginServer/genie-backend:$imageTag"
-az acr build `
-    --subscription $SubscriptionId `
-    --registry $containerRegistryName `
-    --image "genie-backend:$imageTag" `
-    --file (Join-Path $repoRoot "backend\Dockerfile") `
-    $repoRoot `
-    --only-show-errors
-if ($LASTEXITCODE -ne 0) {
-    throw "Backend image build failed."
+if ($reuseProvisionedBackend) {
+    Write-Stage "Stage 5/10: reusing the provisioned backend"
+    $backendImage = $provisionedBackend.image
+}
+else {
+    Write-Stage "Stage 5/10: building and pushing the backend image"
+    $imageTag = (git -C $repoRoot rev-parse --short HEAD 2>$null)
+    if ([string]::IsNullOrWhiteSpace($imageTag)) { $imageTag = Get-Date -Format "yyyyMMddHHmmss" }
+    $backendImage = "$acrLoginServer/genie-backend:$imageTag"
+    az acr build `
+        --subscription $SubscriptionId `
+        --registry $containerRegistryName `
+        --image "genie-backend:$imageTag" `
+        --file (Join-Path $repoRoot "backend\Dockerfile") `
+        $repoRoot `
+        --only-show-errors
+    if ($LASTEXITCODE -ne 0) {
+        throw "Backend image build failed."
+    }
 }
 
 # ---------------------------------------------------------------------------
 # Stage 5: provision the dedicated API Management gateway.
 # ---------------------------------------------------------------------------
 Write-Stage "Stage 6/10: provisioning the API Management gateway (first run commonly takes 30-45 minutes)"
-$gateway = & (Join-Path $repoRoot "scripts\deploy_platform_gateway.ps1") `
-    -SubscriptionId $SubscriptionId `
-    -ResourceGroup $resourceGroup `
-    -ContainerAppName $containerAppName `
-    -AllowedOrigin $allowedOrigin `
-    -PublisherEmail $publisherEmail `
-    -PublisherName $publisherName `
-    -BootstrapBackend | ConvertFrom-Json
+$gatewayParameters = @{
+    SubscriptionId = $SubscriptionId
+    ResourceGroup = $resourceGroup
+    ContainerAppName = $containerAppName
+    AllowedOrigin = $allowedOrigin
+    PublisherEmail = $publisherEmail
+    PublisherName = $publisherName
+    BootstrapBackend = -not $reuseProvisionedBackend
+}
+$gateway = & (Join-Path $repoRoot "scripts\deploy_platform_gateway.ps1") @gatewayParameters | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) {
     throw "Platform gateway deployment failed."
 }
@@ -519,66 +628,71 @@ finally {
 # ---------------------------------------------------------------------------
 # Stage 7: store the GitHub MCP token and roll out the real backend image.
 # ---------------------------------------------------------------------------
-Write-Stage "Stage 8/10: configuring and rolling out the real backend"
-az containerapp secret set `
-    --subscription $SubscriptionId `
-    --resource-group $resourceGroup `
-    --name $containerAppName `
-    --secrets "github-mcp-token=$githubMcpToken" `
-    --only-show-errors -o none
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to store the GitHub MCP token on the Container App."
+if ($reuseProvisionedBackend) {
+    Write-Stage "Stage 8/10: preserving the provisioned backend"
 }
-Remove-Variable githubMcpToken -ErrorAction SilentlyContinue
+else {
+    Write-Stage "Stage 8/10: configuring and rolling out the real backend"
+    az containerapp secret set `
+        --subscription $SubscriptionId `
+        --resource-group $resourceGroup `
+        --name $containerAppName `
+        --secrets "github-mcp-token=$githubMcpToken" `
+        --only-show-errors -o none
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to store the GitHub MCP token on the Container App."
+    }
+    Remove-Variable githubMcpToken -ErrorAction SilentlyContinue
 
-$aiServicesEndpoint = $aiFoundryAccountEndpoint
-$backendEnvironmentVariables = @(
-    "GENIE_SERVICE_NAME=genie-backend",
-    "GENIE_ENVIRONMENT=development",
-    "GENIE_ALLOW_MOCK_AGENTS=false",
-    "GENIE_ALLOW_LOCAL_AGENTS=false",
-    "GENIE_USE_SYNTHETIC_DATA=false",
-    "GENIE_GOVERNANCE_PROVIDER=local",
-    "GENIE_AZURE_FOUNDRY_ENDPOINT=$aiFoundryEndpoint",
-    "GENIE_AZURE_FOUNDRY_PROJECT_NAME=$aiFoundryProjectName",
-    "GENIE_AZURE_FOUNDRY_RESOURCE_GROUP=$resourceGroup",
-    "GENIE_AZURE_SPEECH_ENDPOINT=$aiServicesEndpoint",
-    "GENIE_KEY_VAULT_URI=$keyVaultUri",
-    "GENIE_AZURE_SUBSCRIPTION_ID=$SubscriptionId",
-    "GENIE_DEPLOYMENT_RESOURCE_GROUP=$resourceGroup",
-    "GENIE_DEPLOYMENT_ACR_NAME=$containerRegistryName",
-    "GENIE_DEPLOYMENT_CONTAINER_APPS_ENVIRONMENT_ID=$containerAppsEnvironmentId",
-    "GENIE_DEPLOYMENT_LOCATION=$Location",
-    "GENIE_DEPLOYMENT_STORAGE_ACCOUNT_NAME=$storageAccountName",
-    "GENIE_DEFAULT_LLM=$defaultLlmDeploymentName"
-)
-az containerapp update `
-    --subscription $SubscriptionId `
-    --resource-group $resourceGroup `
-    --name $containerAppName `
-    --set-env-vars @backendEnvironmentVariables `
-    --only-show-errors -o none | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to configure the Genie backend runtime environment."
-}
+    $aiServicesEndpoint = $aiFoundryAccountEndpoint
+    $backendEnvironmentVariables = @(
+        "GENIE_SERVICE_NAME=genie-backend",
+        "GENIE_ENVIRONMENT=development",
+        "GENIE_ALLOW_MOCK_AGENTS=false",
+        "GENIE_ALLOW_LOCAL_AGENTS=false",
+        "GENIE_USE_SYNTHETIC_DATA=false",
+        "GENIE_GOVERNANCE_PROVIDER=local",
+        "GENIE_AZURE_FOUNDRY_ENDPOINT=$aiFoundryEndpoint",
+        "GENIE_AZURE_FOUNDRY_PROJECT_NAME=$aiFoundryProjectName",
+        "GENIE_AZURE_FOUNDRY_RESOURCE_GROUP=$resourceGroup",
+        "GENIE_AZURE_SPEECH_ENDPOINT=$aiServicesEndpoint",
+        "GENIE_KEY_VAULT_URI=$keyVaultUri",
+        "GENIE_AZURE_SUBSCRIPTION_ID=$SubscriptionId",
+        "GENIE_DEPLOYMENT_RESOURCE_GROUP=$resourceGroup",
+        "GENIE_DEPLOYMENT_ACR_NAME=$containerRegistryName",
+        "GENIE_DEPLOYMENT_CONTAINER_APPS_ENVIRONMENT_ID=$containerAppsEnvironmentId",
+        "GENIE_DEPLOYMENT_LOCATION=$Location",
+        "GENIE_DEPLOYMENT_STORAGE_ACCOUNT_NAME=$storageAccountName",
+        "GENIE_DEFAULT_LLM=$defaultLlmDeploymentName"
+    )
+    az containerapp update `
+        --subscription $SubscriptionId `
+        --resource-group $resourceGroup `
+        --name $containerAppName `
+        --set-env-vars @backendEnvironmentVariables `
+        --only-show-errors -o none | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to configure the Genie backend runtime environment."
+    }
 
-$revisionSuffix = ("q" + (Get-Date -Format "MMddHHmm"))
-& (Join-Path $repoRoot "scripts\deploy_backend.ps1") `
-    -SubscriptionId $SubscriptionId `
-    -ResourceGroup $resourceGroup `
-    -ContainerAppName $containerAppName `
-    -BackendImage $backendImage `
-    -AllowedOrigin $allowedOrigin `
-    -GatewayUrl $gatewayUrl `
-    -MemoryStoreEndpoint $cosmosDbEndpoint `
-    -GitHubMcpEndpoint $githubMcpEndpoint `
-    -GitHubMcpTokenSecretName "github-mcp-token" `
-    -PrototypeApiGatewayPublisherEmail $publisherEmail `
-    -PrototypeApiGatewayPublisherName $publisherName `
-    -PrototypeMaxActivePerOwner 0 `
-    -RevisionSuffix $revisionSuffix
-if ($LASTEXITCODE -ne 0) {
-    throw "Backend rollout failed."
+    $revisionSuffix = ("q" + (Get-Date -Format "MMddHHmm"))
+    & (Join-Path $repoRoot "scripts\deploy_backend.ps1") `
+        -SubscriptionId $SubscriptionId `
+        -ResourceGroup $resourceGroup `
+        -ContainerAppName $containerAppName `
+        -BackendImage $backendImage `
+        -AllowedOrigin $allowedOrigin `
+        -GatewayUrl $gatewayUrl `
+        -MemoryStoreEndpoint $cosmosDbEndpoint `
+        -GitHubMcpEndpoint $githubMcpEndpoint `
+        -GitHubMcpTokenSecretName "github-mcp-token" `
+        -PrototypeApiGatewayPublisherEmail $publisherEmail `
+        -PrototypeApiGatewayPublisherName $publisherName `
+        -PrototypeMaxActivePerOwner 0 `
+        -RevisionSuffix $revisionSuffix
+    if ($LASTEXITCODE -ne 0) {
+        throw "Backend rollout failed."
+    }
 }
 
 # ---------------------------------------------------------------------------

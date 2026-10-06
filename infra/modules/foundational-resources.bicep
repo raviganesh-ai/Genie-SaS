@@ -15,6 +15,10 @@ param deployerPrincipalId string
 param foundryModelDeployments array = []
 @description('Deploy the Azure Container Registry and a bootstrap backend Container App as part of this same template (recommended for a first deployment into an empty subscription). Set to false to reuse an existing registry/app instead.')
 param deployContainerRegistryAndBackendApp bool = true
+@description('Create or update the bootstrap backend Container App. Set to false to preserve existingBackendContainerAppName.')
+param provisionBackendContainerApp bool = true
+@description('Existing healthy Genie backend Container App name preserved when provisionBackendContainerApp is false.')
+param existingBackendContainerAppName string = ''
 @allowed([
   'Basic'
   'Standard'
@@ -194,7 +198,7 @@ module containerRegistry 'container-registry.bicep' = if (deployContainerRegistr
   }
 }
 
-module backendContainerApp 'backend-container-app.bicep' = if (deployContainerRegistryAndBackendApp) {
+module backendContainerApp 'backend-container-app.bicep' = if (deployContainerRegistryAndBackendApp && provisionBackendContainerApp) {
   name: 'genie-backend-container-app'
   params: {
     location: location
@@ -209,6 +213,10 @@ module backendContainerApp 'backend-container-app.bicep' = if (deployContainerRe
     managedIdentityClientId: managedIdentity.outputs.clientId
     tags: tags
   }
+}
+
+resource existingBackendContainerApp 'Microsoft.App/containerApps@2024-03-01' existing = if (deployContainerRegistryAndBackendApp && !provisionBackendContainerApp) {
+  name: existingBackendContainerAppName
 }
 
 output managedIdentityPrincipalId string = managedIdentity.outputs.principalId
@@ -232,6 +240,5 @@ output logAnalyticsWorkspaceId string = logAnalytics.outputs.workspaceId
 // `deployContainerRegistryAndBackendApp` guard the module was created under.
 output containerRegistryName string = deployContainerRegistryAndBackendApp ? containerRegistry!.outputs.name : ''
 output containerRegistryLoginServer string = deployContainerRegistryAndBackendApp ? containerRegistry!.outputs.loginServer : ''
-output backendContainerAppName string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.name : ''
-output backendContainerAppFqdn string = deployContainerRegistryAndBackendApp ? backendContainerApp!.outputs.fqdn : ''
-
+output backendContainerAppName string = !deployContainerRegistryAndBackendApp ? '' : provisionBackendContainerApp ? backendContainerApp!.outputs.name : existingBackendContainerApp!.name
+output backendContainerAppFqdn string = !deployContainerRegistryAndBackendApp ? '' : provisionBackendContainerApp ? backendContainerApp!.outputs.fqdn : existingBackendContainerApp!.properties.configuration.ingress.fqdn
